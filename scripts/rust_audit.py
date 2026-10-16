@@ -408,6 +408,7 @@ def parse_file(rel: str, path: Path, text: str) -> FileUnit:
         in_test_region = any(a <= m.start() <= b for a, b in test_regions)
         is_test = bool(
             TEST_ATTR_RE.search(attr_blob)
+            or "#[cfg(test)]" in attr_blob
             or in_test_region
             or kind == "test"
         )
@@ -418,6 +419,14 @@ def parse_file(rel: str, path: Path, text: str) -> FileUnit:
             body_start_line=src.line_of(open_brace), attrs=attrs,
             is_test=is_test, is_async=is_async, line=line,
         ))
+    # Inner functions are local helpers: inherit the enclosing function's
+    # context (e.g. compile-time type assertions inside a #[test] fn).
+    for i, fn in enumerate(fns):
+        for j, outer in enumerate(fns):
+            if i != j and outer.start < fn.start and fn.end <= outer.end \
+                    and outer.is_test:
+                fn.is_test = True
+                break
     return FileUnit(rel=rel, path=path, src=src, kind=kind, fns=fns,
                     test_regions=test_regions,
                     contract_regions=contract_regions)
@@ -753,9 +762,16 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
         masked = unit.src.masked_all
         open_idx = masked.find("{", fn.start)
         raw_body = unit.src.text[open_idx + 1: fn.end] if open_idx >= 0 else fn.body
+        # In `impl Trait for Type` blocks and `trait` default methods a
+        # constant return or a no-op body fulfils the documented contract
+        # (metadata getters, deliberate defaults), not stubbed logic.
+        in_contract = any(a <= fn.start <= b for a, b in unit.contract_regions)
+        # An empty generic fn is the compile-time type-assertion idiom
+        # (`fn check<T: Send>() {}`), not a stub.
+        is_type_assert = "<" in fn.sig.split("(", 1)[0]
         # Only a truly empty `{}` is a stub: a body carrying a comment is a
         # documented no-op and a literal body is a real return value.
-        if not raw_body.strip():
+        if not raw_body.strip() and not in_contract and not is_type_assert:
             out.append(Finding(
                 "R03", "high", f"Function `{fn.name}` has an empty body (stub).",
                 unit.rel, fn.line, fn.name, evidence="{}", fix="none",
@@ -763,10 +779,6 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
             ))
             continue
         visible = mask_source(raw_body, False, True)  # strings visible, comments hidden
-        # In `impl Trait for Type` blocks and `trait` default methods a
-        # constant return fulfils the documented contract (metadata getters,
-        # deliberate defaults), not stubbed logic.
-        in_contract = any(a <= fn.start <= b for a, b in unit.contract_regions)
         if not in_contract and re.fullmatch(
                 r"(?:return\s+)?(?:true|false|-?\d+(?:\.\d+)?[a-z]*|\"[^\"\n]*\"|"
                 r"'(?:\\.|[^\\'])'|Self|[A-Z][A-Z0-9_]{2,})\s*;?",
@@ -785,12 +797,15 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
                 unit.rel, fn.line, fn.name, evidence="if false {", fix="none",
                 fix_hint="Remove the placeholder branch or wire the real feature flag.",
             ))
-        # (?!:) keeps `S::Error`-style return types from inventing params;
+        # Scoped to the parameter list so return types and where-clauses
+        # (`F: FnOnce...`, `S::Error`) never invent phantom params;
         # underscore-prefixed params are intentional ignores, not stubs.
         params = re.findall(r"(?:^|,)\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:(?!:)",
-                            fn.sig.split("(", 1)[-1])
+                            fn.sig.split("(", 1)[-1].split(")", 1)[0])
         params = [p for p in params if p not in ("self",) and not p.startswith("_")]
-        if params and len(re.findall(r"\w+", fn.body)) < 30:
+        # `#[allow(unused_variables)]` declares the ignored params intentional.
+        if params and len(re.findall(r"\w+", fn.body)) < 30 \
+                and not any("unused_variables" in a for a in fn.attrs):
             missing = [p for p in params if not re.search(r"\b" + re.escape(p) + r"\b", fn.body)]
             if len(missing) == len(params):
                 out.append(Finding(
@@ -1563,6 +1578,9 @@ def run_scan(root: Path, cfg: dict, online: bool = False):
         rel = path.relative_to(root).as_posix()
         if excluded(rel):
             continue
+        if path.with_suffix(".stderr").exists():
+            continue  # trybuild compile-fail fixture: it must NOT compile, so
+                      # no code-quality verdict on it means anything
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

@@ -23,9 +23,10 @@ calling an audit complete.
 
 ## Tests
 
-Production E2E suite: the real CLI audited against a real Rust workspace
-(`BurntSushi/ripgrep` pinned by commit — no demo fixtures). Needs network to
-fetch the pinned workspace, Python 3.11+ and pytest in a venv:
+Production E2E suite: the real CLI audited against real Rust workspaces
+(`BurntSushi/ripgrep` and `tokio-rs/tokio`, each pinned by commit — no demo
+fixtures), with per-project goldens. Needs network to fetch the pinned
+workspaces, Python 3.11+ and pytest in a venv:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest

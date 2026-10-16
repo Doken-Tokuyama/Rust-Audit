@@ -183,8 +183,11 @@ verification + similarity + reputation signals are the reliable core.
   explicitly.
 - R02 "no oracle" cannot see through helper calls: tests whose assertions live
   in helpers are reported at low severity as "no direct oracle" — verify those
-  by hand. R03 exempts trait contracts (`impl X for Y`, `trait` defaults), so a
-  stubbed default method is reported only via its other signals.
+  by hand. R03 exempts trait contracts (`impl X for Y`, `trait` defaults) and
+  the compile-time type-assertion idiom (`fn check<T: Send>() {}`), so a stubbed
+  default method is reported only via its other signals. cfg/macro-gated no-op
+  alternates (feature-off metric hooks, mock doubles) still read as empty
+  bodies or constant returns — review those in context.
 
 ## License
 
