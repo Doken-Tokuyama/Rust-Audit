@@ -768,18 +768,26 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
             if len(spots) < 2:
                 continue
             run = best = 1
+            claim_pure = pure[key]
             for (_, e1), (s2, _) in zip(spots, spots[1:]):
                 if _only_asserts_between(body_vis, spans, e1, s2):
+                    # The interleaved asserts matter too: their expressions
+                    # can advance state (recv_many, poll), turning the repeat
+                    # into a deliberate re-check, not a redundant one.
+                    inner = [a for _, s, e, a in asserts
+                             if e1 <= s and e + 1 <= s2]
+                    claim_pure = claim_pure and all(map(_pure_args, inner))
                     run += 1
                     best = max(best, run)
                 else:
                     run = 1
             if best >= 2:
-                # Read-only arguments make redundancy provable -> plain claim.
-                # Effectful arguments can advance state (e.g.
-                # `stream.next().await`), so the claim carries only the provable
-                # repeat plus a hedge (ADR 0001: claim only what is provable).
-                hedge = "" if pure[key] else (
+                # Read-only repeated AND interleaved arguments make
+                # redundancy provable -> plain claim. Effectful ones can
+                # advance state (e.g. `stream.next().await`), so the claim
+                # carries only the provable repeat plus a hedge
+                # (ADR 0001: claim only what is provable).
+                hedge = "" if claim_pure else (
                     "; redundant only if the interleaved asserts do not "
                     "advance state")
                 out.append(Finding(

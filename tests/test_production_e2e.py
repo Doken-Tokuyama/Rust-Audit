@@ -300,15 +300,26 @@ def test_tokio_refinements_match_real_code(scanned):
     assert dup_fused, "same-scenario repeats stay reported as review signals"
     assert all("advance state" in f["message"] for f in dup_fused), \
         "state-advancing repeats must carry the hedge, not a redundancy claim"
+    # send_recv_many_* re-check `expected == buffer` after an interleaved
+    # recv_many assert advances the channel: even read-only repeated args must
+    # keep the hedge when the interleaved asserts can advance state.
+    dup_send = [f for f in where(rule_id="R02", file="tokio/tests/sync_mpsc.rs")
+                if "Duplicate" in f["message"]]
+    assert dup_send, "back-to-back pure repeats are still reported"
+    assert all("advance state" in f["message"] for f in dup_send), \
+        "state-advancing interleaving must keep the hedge too"
 
 
 def test_duplicate_claim_wording_tracks_argument_purity(tmp_path):
-    # ADR 0002 purity tier. The plain tier is provably absent from the pinned
-    # workspaces (0 pure-argument repeats in 450k lines), so its branch needs a
+    # ADR 0002 purity tier. No repeat in the pinned workspaces qualifies for
+    # the plain claim: 3 have read-only repeated args but state-advancing
+    # interleaved asserts (tokio sync_mpsc recv_many, cancellation-token poll)
+    # and 64 have state-capable args. So the plain branch is pinned here with a
     # crafted case — a tiny real crate audited through the public CLI, not a
-    # fixture standing in for production code. Read-only arguments make
-    # redundancy provable -> plain claim; arguments that can execute code or
-    # advance state keep the hedge; statement-separated repeats stay silent.
+    # fixture standing in for production code. Read-only args everywhere make
+    # redundancy provable -> plain claim; anything that can advance state (the
+    # repeated args OR the interleaved asserts) keeps the hedge;
+    # statement-separated repeats stay silent.
     ws = tmp_path / "purity"
     (ws / "src").mkdir(parents=True)
     (ws / "Cargo.toml").write_text(
@@ -329,6 +340,13 @@ mod tests {
         assert_eq!(p.poll(), 1);
     }
     #[test]
+    fn interleaved_effect() {
+        let mut x = Poller;
+        assert_eq!(x, 2);
+        assert_eq!(x.poll(), 1);
+        assert_eq!(x, 2);
+    }
+    #[test]
     fn across_scenarios() {
         let mut n = 0;
         n += 1;
@@ -342,12 +360,15 @@ mod tests {
     dups = [f for f in report(tmp_path / "out")["findings"]
             if f["rule_id"] == "R02" and "Duplicate" in f["message"]]
     by_fn = {f["function"]: f["message"] for f in dups}
-    assert set(by_fn) == {"pure_repeat", "effectful_repeat"}, \
+    assert set(by_fn) == {"pure_repeat", "effectful_repeat",
+                          "interleaved_effect"}, \
         f"unexpected duplicate set: {sorted(by_fn)}"
     assert "advance state" not in by_fn["pure_repeat"], \
         "read-only args make redundancy provable: claim it plainly"
     assert "advance state" in by_fn["effectful_repeat"], \
         "state-capable args must carry the hedge, not a redundancy claim"
+    assert "advance state" in by_fn["interleaved_effect"], \
+        "a state-advancing interleaved assert makes the repeat non-redundant"
 
 
 def test_fix_dry_run_changes_nothing(prod_workspace, project, tmp_path):
