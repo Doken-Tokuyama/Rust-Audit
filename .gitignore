@@ -6,3 +6,9 @@ AGENTS.md
 __pycache__/
 *.pyc
 report/
+.pytest_cache/
+
+# Test environment and fixture build output
+.venv/
+target/
+Cargo.lock

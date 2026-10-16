@@ -21,6 +21,16 @@ Every run writes a **not-executed report** (`report/not-executed-<date>.md`)
 listing the checks that could not run and how to enable them — read it before
 calling an audit complete.
 
+## Tests
+
+Integration suite (real CLI against the real fixture crate `tests/fixtures/demo_crate`).
+Needs Python 3.11+ and pytest in a venv:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install pytest
+.venv/bin/python -m pytest tests/
+```
+
 See [SKILL.md](SKILL.md) for the rule catalog (R01–R21), the auto-fix policy,
 the CI templates and the honest limitations.
 
