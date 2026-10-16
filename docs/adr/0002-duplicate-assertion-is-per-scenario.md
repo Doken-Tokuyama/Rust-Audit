@@ -13,12 +13,16 @@ cure, not the smell. Measured against the two pinned workspaces (450k lines):
 (typical rows of a parse-flag matrix like `test_path_separator`'s `-A5` vs
 `--after-context 5`). We decided to claim a duplicate only when identical
 asserts (same macro, same arguments) repeat inside ONE scenario — nothing but
-other asserts between them. For the 67 same-scenario repeats that remain,
-redundancy itself is not provable: every one of them has state-advancing
-argument expressions (`stream.next().await`, method calls — zero pure-argument
-cases), so per ADR 0001 the claim says only what is provable — the repeat —
-with an explicit hedge ("redundant only if the interleaved asserts do not
-advance state") and low severity.
+other asserts between them. What the claim says then depends on argument purity. Read-only
+arguments (no calls, field access, indexing, deref or `?` — a conservative
+check) make the repeat provably redundant, so it keeps the plain claim.
+Arguments that can execute code or advance state make redundancy itself
+unprovable — the assert's own expression may poll a stream — so per ADR 0001
+the claim says only what is provable: the repeat, with an explicit hedge
+("redundant only if the interleaved asserts do not advance state") and low
+severity. All 67 same-scenario repeats in the pinned workspaces are of the
+second kind (zero pure-argument repeats in 450k lines), so the plain tier is
+exercised by a crafted case through the public CLI in the E2E suite.
 
 ## Considered Options
 
@@ -42,5 +46,10 @@ advance state") and low severity.
 - The rule stays armed for the provable case: identical asserts repeated
   back-to-back with pure arguments (verified through the real CLI on a crafted
   case) — the classic copy-paste artifact in generated code.
+- The purity check is deliberately conservative in one direction only:
+  multiplication (`a * b`) and tuple/grouping parens look like deref and calls
+  to a textual scan, so they get the hedge too — a false hedge only weakens
+  wording, never accuses. Float literals and string contents are masked first
+  and do not force the hedge.
 - `macro_calls` returns invocations grouped by macro name, not by position;
   any pairing of its results must sort by position first.

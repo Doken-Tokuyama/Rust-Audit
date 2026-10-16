@@ -644,6 +644,18 @@ def check_r01(unit: FileUnit, out: list[Finding]) -> None:
         ))
 
 
+def _pure_args(args: str) -> bool:
+    """True when the assert arguments can only read state.
+
+    Conservative: calls, field/method access (auto-deref may run code),
+    indexing, deref and `?` make the arguments effectful; float literals do
+    not (their `.` is a value, not a path). PartialEq impls are out of scope,
+    as in the Test Smells Catalog itself."""
+    scan = mask_source(args, True, True)
+    scan = re.sub(r"\d+\.\d+", "", scan)
+    return not re.search(r"[(\[.*?]", scan)
+
+
 def _only_asserts_between(text: str, spans: list[tuple[int, int]],
                           e1: int, s2: int) -> bool:
     """True when only other assert calls (and ; { }) separate the two spots."""
@@ -746,10 +758,12 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
         asserts.sort(key=lambda t: t[1])
         spans = [(s, e + 1) for _, s, e, _ in asserts]
         occ: dict[str, list[tuple[int, int]]] = {}
+        pure: dict[str, bool] = {}
         for name, start, end, args in asserts:
             key = name + "!(" + re.sub(r"\s+", " ", args) + ")"
             if key:
                 occ.setdefault(key, []).append((start, end + 1))
+                pure[key] = _pure_args(args)
         for key, spots in occ.items():
             if len(spots) < 2:
                 continue
@@ -761,14 +775,17 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
                 else:
                     run = 1
             if best >= 2:
-                # The repeat itself is provable; REDUNDANCY is not: assert
-                # arguments can advance state (e.g. `stream.next().await`).
-                # ADR 0001: claim only what is provable, with accurate wording.
+                # Read-only arguments make redundancy provable -> plain claim.
+                # Effectful arguments can advance state (e.g.
+                # `stream.next().await`), so the claim carries only the provable
+                # repeat plus a hedge (ADR 0001: claim only what is provable).
+                hedge = "" if pure[key] else (
+                    "; redundant only if the interleaved asserts do not "
+                    "advance state")
                 out.append(Finding(
                     "R02", "low",
                     f"Duplicate assertion in `{fn.name}` ({best}x identical "
-                    f"back-to-back; redundant only if the interleaved asserts "
-                    f"do not advance state).",
+                    f"back-to-back{hedge}).",
                     unit.rel, fn.line, fn.name, evidence=key[:60], fix="none",
                     fix_hint="Remove the redundancy or vary the tested input.",
                 ))

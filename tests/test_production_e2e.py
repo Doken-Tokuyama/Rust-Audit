@@ -302,6 +302,54 @@ def test_tokio_refinements_match_real_code(scanned):
         "state-advancing repeats must carry the hedge, not a redundancy claim"
 
 
+def test_duplicate_claim_wording_tracks_argument_purity(tmp_path):
+    # ADR 0002 purity tier. The plain tier is provably absent from the pinned
+    # workspaces (0 pure-argument repeats in 450k lines), so its branch needs a
+    # crafted case — a tiny real crate audited through the public CLI, not a
+    # fixture standing in for production code. Read-only arguments make
+    # redundancy provable -> plain claim; arguments that can execute code or
+    # advance state keep the hedge; statement-separated repeats stay silent.
+    ws = tmp_path / "purity"
+    (ws / "src").mkdir(parents=True)
+    (ws / "Cargo.toml").write_text(
+        '[package]\nname = "purity"\nversion = "0.1.0"\nedition = "2021"\n')
+    (ws / "src" / "lib.rs").write_text('''
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pure_repeat() {
+        let x = 1 + 1;
+        assert_eq!(x, 2);
+        assert_eq!(x, 2);
+    }
+    #[test]
+    fn effectful_repeat() {
+        let mut p = Poller;
+        assert_eq!(p.poll(), 1);
+        assert_eq!(p.poll(), 1);
+    }
+    #[test]
+    fn across_scenarios() {
+        let mut n = 0;
+        n += 1;
+        assert_eq!(n, 1);
+        n += 1;
+        assert_eq!(n, 1);
+    }
+}
+''')
+    scan(ws, tmp_path / "out", "--fail-on", "low")
+    dups = [f for f in report(tmp_path / "out")["findings"]
+            if f["rule_id"] == "R02" and "Duplicate" in f["message"]]
+    by_fn = {f["function"]: f["message"] for f in dups}
+    assert set(by_fn) == {"pure_repeat", "effectful_repeat"}, \
+        f"unexpected duplicate set: {sorted(by_fn)}"
+    assert "advance state" not in by_fn["pure_repeat"], \
+        "read-only args make redundancy provable: claim it plainly"
+    assert "advance state" in by_fn["effectful_repeat"], \
+        "state-capable args must carry the hedge, not a redundancy claim"
+
+
 def test_fix_dry_run_changes_nothing(prod_workspace, project, tmp_path):
     ws = tmp_path / "dry"
     shutil.copytree(prod_workspace, ws,
