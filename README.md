@@ -23,8 +23,9 @@ calling an audit complete.
 
 ## Tests
 
-Integration suite (real CLI against the real fixture crate `tests/fixtures/demo_crate`).
-Needs Python 3.11+ and pytest in a venv:
+Production E2E suite: the real CLI audited against a real Rust workspace
+(`BurntSushi/ripgrep` pinned by commit — no demo fixtures). Needs network to
+fetch the pinned workspace, Python 3.11+ and pytest in a venv:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pytest

@@ -1883,6 +1883,18 @@ def run_validators(root: Path, budget: int = 600) -> list[EvidenceRun]:
     return runs
 
 
+def _rust_digest(root: Path) -> str:
+    """Content fingerprint of all .rs sources (fixer change detection)."""
+    h = hashlib.sha256()
+    for p in sorted(root.rglob("*.rs")):
+        rel = p.relative_to(root)
+        if p.is_symlink() or rel.parts[0] in {".git", "target"}:
+            continue
+        h.update(rel.as_posix().encode("utf-8"))
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
 def run_safe_fixes(root: Path, findings: list[Finding], units: list[FileUnit],
                    dry_run: bool = False, use_cargo: bool = True) -> dict:
     edits, diffs, env_additions = plan_safe_fixes(units, findings)
@@ -1919,9 +1931,7 @@ def run_safe_fixes(root: Path, findings: list[Finding], units: list[FileUnit],
                             encoding="utf-8")
             report["created"].append("deny.toml")
         if use_cargo and shutil.which("cargo") and (root / "Cargo.toml").exists():
-            for argv in (["cargo", "fmt"], ["cargo", "clippy", "--fix", "--allow-dirty",
-                                             "--allow-staged", "--allow-no-vcs",
-                                             "--all-targets"]):
+            def _fixer(argv: list[str]) -> None:
                 try:
                     proc = subprocess.run(argv, cwd=root, capture_output=True, text=True,
                                           encoding="utf-8", errors="replace", timeout=900)
@@ -1931,6 +1941,18 @@ def run_safe_fixes(root: Path, findings: list[Finding], units: list[FileUnit],
                 except Exception as exc:
                     report["evidence"].append(EvidenceRun(argv[1], " ".join(argv), "error",
                                                           notes=str(exc)))
+
+            # clippy --fix splices suggestions unformatted and can need extra
+            # passes for overlapping fixes; loop it to a fixpoint (bounded) and
+            # run fmt LAST, so one `fix` run converges and a second one applies
+            # nothing (the documented idempotency).
+            for _ in range(3):
+                before = _rust_digest(root)
+                _fixer(["cargo", "clippy", "--fix", "--allow-dirty",
+                        "--allow-staged", "--allow-no-vcs", "--all-targets"])
+                if _rust_digest(root) == before:
+                    break
+            _fixer(["cargo", "fmt"])
         validations = run_validators(root)
         report["evidence"].extend(validations)
         if any(v.status in ("fail", "error") for v in validations):

@@ -179,8 +179,8 @@ verification + similarity + reputation signals are the reliable core.
   ~0.20 Macro-F1 out of domain (AICD Bench) and would only add noise. Detect the
   *traps*, not the author.
 - Fix validation requires a compilable project; on intentionally broken targets
-  (like this repo's trap fixture) edits are applied without compile validation —
-  the tool reports that explicitly.
+  edits are applied without compile validation — the tool reports that
+  explicitly.
 
 ## License
 
