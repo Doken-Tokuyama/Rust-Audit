@@ -170,6 +170,10 @@ verification + similarity + reputation signals are the reliable core.
 
 ## Limitations (be honest about these)
 
+Before refining any heuristic, read
+[docs/adr/0001-false-positive-vs-true-positive-criterion.md](docs/adr/0001-false-positive-vs-true-positive-criterion.md):
+remove provably wrong claims, never rules that work as documented.
+
 - Heuristic lexer + structural analysis, not a full `syn` parser: macro-heavy or
   unusual formatting can evade fn-level rules (file-level rules still run).
 - R19/online checks need network; offline runs say so explicitly.
