@@ -33,7 +33,8 @@ A finding is a **false positive** when any of these hold:
    `.stderr`) must NOT compile; no quality verdict on them means anything.
 
 It is a **true positive** when the claim is provable and no exemption applies —
-even in a healthy project: duplicate assertions (same args twice in one test),
+even in a healthy project: duplicate assertions (identical macro+args repeated
+within one scenario — ADR 0002 refines this claim),
 magic-number comparisons, bare-`assert!` roulette, and cfg/macro-gated no-op
 alternates (feature-off metric hooks, mock doubles) stay reported. Those are
 review signals with accurate wording, not tool bugs.

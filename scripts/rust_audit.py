@@ -644,6 +644,18 @@ def check_r01(unit: FileUnit, out: list[Finding]) -> None:
         ))
 
 
+def _only_asserts_between(text: str, spans: list[tuple[int, int]],
+                          e1: int, s2: int) -> bool:
+    """True when only other assert calls (and ; { }) separate the two spots."""
+    pos = e1
+    for a_start, a_end in spans:
+        if e1 <= a_start and a_end <= s2:
+            if not re.fullmatch(r"[\s;{}]*", text[pos:a_start]):
+                return False
+            pos = a_end
+    return bool(re.fullmatch(r"[\s;{}]*", text[pos:s2]))
+
+
 def check_r02(unit: FileUnit, out: list[Finding]) -> None:
     for fn in unit.fns:
         # Only functions carrying a real test attribute are tests: helpers
@@ -656,8 +668,8 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
         # Assertions are compared with their string literals visible: masked
         # literals make distinct asserts look identical (false duplicates) and
         # hide failure messages from the roulette check.
-        asserts = macro_calls(mask_source(raw_body, False, True),
-                              "assert", "assert_eq", "assert_ne")
+        body_vis = mask_source(raw_body, False, True)
+        asserts = macro_calls(body_vis, "assert", "assert_eq", "assert_ne")
         has_panic = bool(re.search(r"\b(panic!|unreachable!)\s*\(", body))
         returns_result = "Result" in fn.sig
         has_try = bool(re.search(r"\?\s*;", body))
@@ -723,19 +735,44 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
                 unit.rel, fn.line, fn.name, evidence=f"{no_msg} bare asserts", fix="none",
                 fix_hint="Give each assertion an explanatory message.",
             ))
-        # duplicate assertion
-        seen: dict[str, int] = {}
-        for _, start, _, args in asserts:
-            key = re.sub(r"\s+", " ", args)
-            seen[key] = seen.get(key, 0) + 1
-        for key, cnt in seen.items():
-            if cnt >= 2 and key:
+        # Duplicate assertion: identical asserts repeated inside ONE scenario
+        # (nothing but other asserts between them). The catalog's fix is
+        # "vary the input" — a statement between the repeats means a new
+        # scenario, where repeating the expectation is intentional (ADR 0002).
+        # macro_calls groups by macro name, so sort by position; the key keeps
+        # the macro name (assert_ne! vs assert_eq! assert OPPOSITES). Its `end`
+        # is the INDEX of the closing paren, so spans grow by one to cover it:
+        # the gap between two calls must not start inside the first one.
+        asserts.sort(key=lambda t: t[1])
+        spans = [(s, e + 1) for _, s, e, _ in asserts]
+        occ: dict[str, list[tuple[int, int]]] = {}
+        for name, start, end, args in asserts:
+            key = name + "!(" + re.sub(r"\s+", " ", args) + ")"
+            if key:
+                occ.setdefault(key, []).append((start, end + 1))
+        for key, spots in occ.items():
+            if len(spots) < 2:
+                continue
+            run = best = 1
+            for (_, e1), (s2, _) in zip(spots, spots[1:]):
+                if _only_asserts_between(body_vis, spans, e1, s2):
+                    run += 1
+                    best = max(best, run)
+                else:
+                    run = 1
+            if best >= 2:
+                # The repeat itself is provable; REDUNDANCY is not: assert
+                # arguments can advance state (e.g. `stream.next().await`).
+                # ADR 0001: claim only what is provable, with accurate wording.
                 out.append(Finding(
                     "R02", "low",
-                    f"Duplicate assertion in `{fn.name}` ({cnt}x identical).",
+                    f"Duplicate assertion in `{fn.name}` ({best}x identical "
+                    f"back-to-back; redundant only if the interleaved asserts "
+                    f"do not advance state).",
                     unit.rel, fn.line, fn.name, evidence=key[:60], fix="none",
-                    fix_hint="Remove redundancy or vary the tested input.",
+                    fix_hint="Remove the redundancy or vary the tested input.",
                 ))
+
         # magic numbers in expected results
         magic = [a for _, _, _, a in asserts if re.search(r"^\s*-?\d+\s*,|\,\s*-?\d+\s*$", re.sub(r"\s+", " ", a))]
         if len(magic) >= 2:

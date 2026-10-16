@@ -49,16 +49,27 @@ TOOL = ROOT / "scripts" / "rust_audit.py"
 #   - trybuild compile-fail fixtures (sibling `.stderr`) must NOT compile, so
 #     they are excluded from every check (no verdict on them means anything);
 #   - `#[allow(unused_variables)]` declares ignored params intentional.
+# Third deliberate update (ADR 0002): R02 "duplicate assertion" now claims
+# only identical asserts repeated inside ONE scenario (nothing but other
+# asserts between them). Same expectation across scenarios — 495 of the 562
+# findings this used to emit on these two workspaces, mostly parse-flag matrix
+# rows like test_path_separator — is the catalog's own CURE ("vary the input")
+# and is no longer reported (ripgrep 200, tokio 295 gone). The 67 same-scenario
+# repeats stay as review signals, with a "redundant only if the interleaved
+# asserts do not advance state" hedge: their arguments poll streams and run
+# methods (0 pure-argument cases in 450k lines), so redundancy is not provable.
+# The macro name is part of the identity: assert_ne! vs assert_eq! assert
+# opposites and can never be duplicates of each other.
 PROJECTS = {
     "ripgrep": {
         "url": "https://github.com/BurntSushi/ripgrep",
         "sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
         "clean_rule": "R01",  # absent here: `scan --rules R01` must exit 0
-        "total": 521,
+        "total": 321,
         "by_severity": {"critical": 2, "high": 160, "medium": 19,
-                        "low": 324, "info": 16},
+                        "low": 124, "info": 16},
         "by_rule": {
-            "R02": 324, "R09": 140, "R04": 22, "R14": 12, "R10": 6,
+            "R02": 124, "R09": 140, "R04": 22, "R14": 12, "R10": 6,
             "R03": 4, "R20": 3, "R11": 2, "R18c": 2, "R08": 1, "R12": 1,
             "R18a": 1, "R18d": 1, "R18e": 1, "R21": 1,
         },
@@ -67,11 +78,11 @@ PROJECTS = {
         "url": "https://github.com/tokio-rs/tokio",
         "sha": "cdd9dae3aa5056e23dc4d5bc4f852ab8fbf27aff",
         "clean_rule": "R13",  # absent here: `scan --rules R13` must exit 0
-        "total": 2731,
+        "total": 2436,
         "by_severity": {"critical": 13, "high": 1245, "medium": 259,
-                        "low": 1034, "info": 180},
+                        "low": 739, "info": 180},
         "by_rule": {
-            "R02": 1023, "R09": 541, "R11": 796, "R08": 160, "R10": 76,
+            "R02": 728, "R09": 541, "R11": 796, "R08": 160, "R10": 76,
             "R16": 49, "R01": 16, "R17": 9, "R18c": 6, "R04": 5, "R14": 5,
             "R18a": 5, "R03": 30, "R20": 3, "R18d": 3, "R06": 2, "R07": 1,
             "R18e": 1,
@@ -241,6 +252,13 @@ def test_ripgrep_refinements_match_real_code(scanned):
                                       file="crates/searcher/src/sink.rs")
                       if "ignores all" in f["message"]]
     assert not ignored_params, "underscore-prefixed params are intentional"
+    # test_path_separator asserts the same expectation after four different
+    # parse scenarios (one arrange step each): intentional, not redundant.
+    dup_sep = [f for f in where(rule_id="R02",
+                                file="crates/core/flags/defs.rs",
+                                function="test_path_separator")
+               if "Duplicate" in f["message"]]
+    assert not dup_sep, "same expectation across scenarios is not a duplicate"
 
 
 def test_tokio_refinements_match_real_code(scanned):
@@ -271,6 +289,17 @@ def test_tokio_refinements_match_real_code(scanned):
                                  file="tokio/src/util/blocking_check.rs")
                 if "ignores all" in f["message"]]
     assert not blocking, "#[allow(unused_variables)] declares intent"
+    # fused_stream_waits_for_outstanding_permit repeats expectations whose args
+    # advance the stream (next().await polls): textually same-scenario, so the
+    # repeat stays reported as a review signal — but only with the state-advance
+    # hedge, never as a plain redundancy claim (ADR 0001 accurate wording).
+    dup_fused = [f for f in where(rule_id="R02",
+                                  file="tokio-stream/tests/mpsc_bounded_stream.rs",
+                                  function="fused_stream_waits_for_outstanding_permit")
+                 if "Duplicate" in f["message"]]
+    assert dup_fused, "same-scenario repeats stay reported as review signals"
+    assert all("advance state" in f["message"] for f in dup_fused), \
+        "state-advancing repeats must carry the hedge, not a redundancy claim"
 
 
 def test_fix_dry_run_changes_nothing(prod_workspace, project, tmp_path):
