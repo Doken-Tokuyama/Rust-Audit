@@ -36,6 +36,13 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 See [SKILL.md](SKILL.md) for the rule catalog (R01–R21), the auto-fix policy,
 the CI templates and the honest limitations.
 
+## Security
+
+The trust model is explicit: what executes (literal `cargo` argv, no shell),
+what leaves the machine (opt-in `--online` registry/OSV lookups only) and
+what writes to disk (transactional `fix`). See [SECURITY.md](SECURITY.md) —
+including the notes for static skill auditors.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). © 2026 Doken-Tokuyama.
