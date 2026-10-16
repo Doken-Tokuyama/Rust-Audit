@@ -1,0 +1,20 @@
+# Rust Audit configuration.
+# Copy to the root of the audited project as `rust-ai-audit.toml`.
+
+[rules]
+# Disable rules by id (prefixes work: "R18" disables all dependency rules).
+disabled = []
+# Example: disabled = ["R14", "R15"]
+
+[thresholds]
+clones_per_fn = 3          # R14
+lifetimes_per_fn = 3       # R15
+arc_mutex_per_file = 4     # R17
+mocks_per_test = 5         # R07
+
+# Glob patterns (fnmatch) relative to the audited root.
+exclude = ["target/*", "*/target/*", ".git/*", "report/*", "*/node_modules/*"]
+
+# Path to an organization-private list of known hallucinated / banned crate
+# names (one per line). Merged with resources/suspicious_names.txt.
+corpus = ""

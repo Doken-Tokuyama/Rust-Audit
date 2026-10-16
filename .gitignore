@@ -1,0 +1,8 @@
+# Local-only (never committed, never pushed)
+AGENTS.md
+.freebuff/
+
+# Tool caches and audit output
+__pycache__/
+*.pyc
+report/

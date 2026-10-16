@@ -1,0 +1,101 @@
+# CI pipeline for AI-generated Rust code auditing.
+# Copy to .github/workflows/rust-audit.yml of the audited project.
+#
+# IMPORTANT: pin every third-party Action to a full commit SHA before enabling
+# (requirement for OpenSSF Scorecard / zizmor). The @vX tags below are
+# placeholders; resolve each to a SHA at https://github.com/<org>/<repo>/releases.
+
+name: Rust Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-audit:
+    name: Rust Audit scan (SARIF)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload SARIF to Code Scanning
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Scan for stubs, fake tests and fake dependencies
+        run: |
+          python3 skills/Rust-Audit/scripts/rust_ai_audit.py scan . \
+            --format terminal,md,json,sarif --out report --fail-on high
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: report
+          category: rust-audit
+      - name: Upload Markdown report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-audit-report
+          path: report/*.md
+
+  rust-checks:
+    name: cargo checks (locked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy (panic/unwrap/todo lints)
+        run: |
+          cargo clippy --all-targets --message-format=json -- \
+            -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic \
+            -W clippy::indexing_slicing -W clippy::todo -W clippy::unimplemented \
+            -W clippy::await_holding_lock
+      - name: test (locked)
+        run: cargo test --locked --workspace
+
+  supply-chain:
+    name: dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: RustSec advisories
+        run: cargo install cargo-audit --locked && cargo audit
+      - name: cargo-deny (sources, bans, licenses, yanked)
+        run: cargo install cargo-deny --locked && cargo deny check
+      - name: cargo-vet (audited dependencies)
+        run: cargo install cargo-vet --locked && cargo vet check
+        continue-on-error: true   # remove once your audits.toml is populated
+      - name: OSV scan
+        uses: google/osv-scanner-action@v1
+        with:
+          scan-args: |-
+            --recursive
+            --output=report/osv.json
+            ./
+
+  workflow-self-check:
+    name: zizmor (workflow security)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zizmor
+        run: pipx install zizmor
+      - name: Audit workflows
+        run: zizmor --format=sarif . > zizmor.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor

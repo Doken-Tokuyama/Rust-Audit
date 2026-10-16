@@ -1,0 +1,21 @@
+# Copy to .pre-commit-config.yaml of the audited project.
+# Local hooks are fast gates; the CI workflow remains the authority.
+repos:
+  - repo: local
+    hooks:
+      - id: rust-audit
+        name: Rust Audit (stubs, fake tests, fake deps)
+        entry: python3 skills/Rust-Audit/scripts/rust_ai_audit.py scan .
+        language: system
+        pass_filenames: false
+        args: ["--format", "terminal", "--fail-on", "high"]
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: bash -c 'cargo fmt --all -- --check'
+        language: system
+        pass_filenames: false
+      - id: cargo-clippy-fast
+        name: cargo clippy (todo/unimplemented gate)
+        entry: bash -c 'cargo clippy --all-targets -- -D clippy::todo -D clippy::unimplemented'
+        language: system
+        pass_filenames: false

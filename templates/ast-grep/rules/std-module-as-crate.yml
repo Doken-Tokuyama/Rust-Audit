@@ -1,0 +1,12 @@
+# R18b: standard-library modules referenced as if they were external crates
+# (45% of LLM crate hallucinations, arxiv 2606.08444).
+# The engine's built-in fix (--safe) already rewrites these; this rule exists
+# for projects that want the rewrite inside ast-grep workflows.
+id: std-module-as-crate
+language: Rust
+rule:
+  regex: ^(?:fs|io|str|fmt|collections|net|path|sync|thread|time|env|process|mem|slice|string|os|error|borrow|hash|iter|ops|option|result|cell|char|convert|default|marker|pin|task|future|ffi|panic)$
+  kind: use_wildcard
+fix: std::$$$REST
+message: Qualify the standard-library path (use std::<module>::...).
+severity: error

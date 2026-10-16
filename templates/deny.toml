@@ -1,0 +1,27 @@
+# cargo-deny policy for AI-generated / third-party dependency control.
+# Install: cargo install cargo-deny   ·   Check: cargo deny check
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+
+[licenses]
+unlicensed = "deny"
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
+         "BSD-3-Clause", "ISC", "Unicode-DFS-2016", "Unicode-3.0", "Zlib", "MPL-2.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# Block names that appear in the slopsquatting corpus or that you removed after
+# an audit. Example:
+# [[bans.deny]]
+# name = "rust-http-client"
+# reason = "Generic name matching AI-hallucination patterns; verified nonexistent"
+
+[sources]
+# Only the official crates.io registry is allowed.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

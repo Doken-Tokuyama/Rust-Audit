@@ -1,0 +1,6 @@
+# ast-grep configuration for Rust Audit assisted fixes.
+# Requires `ast-grep` (https://ast-grep.github.io) — optional backend.
+# Review every rewrite: ast-grep is syntax-aware, NOT type-aware.
+ruleDirs:
+  - ./rules
+language: rust

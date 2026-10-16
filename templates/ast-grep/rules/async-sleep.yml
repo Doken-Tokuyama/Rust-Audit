@@ -1,0 +1,13 @@
+# R16: replace blocking std::thread::sleep with tokio::time::sleep in async fns.
+# WARNING: only correct inside `async fn` with the tokio "time" feature enabled.
+# Run with review: ast-grep scan --config sgconfig.yml --interactive
+id: async-thread-sleep
+language: Rust
+rule:
+  pattern: std::thread::sleep($DURATION)
+  # ast-grep cannot know the enclosing fn is async: ALWAYS review before applying.
+fix: tokio::time::sleep($DURATION).await
+message: >
+  Blocking sleep on the Tokio runtime. Use tokio::time::sleep(..).await or
+  spawn_blocking. Verify the enclosing function is async and "time" is enabled.
+severity: warning

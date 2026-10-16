@@ -1,0 +1,57 @@
+# Seed corpus of crate names with the generic "too plausible to be real"
+# patterns that LLMs invent (arxiv 2606.08444, USENIX Sec 2025 package
+# hallucination study) and that attackers register (slopsquatting).
+# Extend with your organization's private list via `corpus = "..."` in
+# rust-ai-audit.toml. Also matched by pattern in the engine:
+#   ^(rust|async|simple|easy|smart|fast)[-_].*   and   .*[-_](utils?|helpers?|extensions?|extra|lite|lib|core)$
+rust-http-client
+rust-database
+rust-db
+rust-utils
+rust-helpers
+rust-orm
+rust-file-utils
+rust-json-utils
+rust-web-utils
+rust-auth-utils
+async-utils
+async-helpers
+async-utils-extra
+async-database-pool
+async-http-client
+async-helpers-rs
+file-utils
+file-helpers
+json-utils
+string-utils
+text-utils
+io-utils
+net-utils
+db-utils
+test-utils-extra
+tokio-utils-extra
+tokio-helpers
+serde-helpers
+serde-extensions
+axum-extensions
+axum-helpers
+hyper-extensions
+easy-utils
+easy-crud
+simple-crud
+simple-cache
+smart-cache
+fast-json
+fast-cache
+smart-utils
+universal-utils
+common-utils
+misc-utils
+util-rs
+helper-rs
+extra-utils
+pro-utils
+plus-utils
+mini-utils
+light-utils
+ultra-utils

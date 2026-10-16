@@ -1,0 +1,15 @@
+# Copy to .github/dependabot.yml of the audited project.
+# Keeps Cargo.lock updated with reviewed PRs (lockfile hygiene).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Review each dependency bump before merging: run `cargo tree -i <crate>`
+    # and Rust Audit `scan --online` on the diff.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
