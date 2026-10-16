@@ -108,8 +108,13 @@ SUSPICIOUS_NAME_RE = re.compile(
 )
 
 GENERIC_TEST_NAME_RE = re.compile(
-    r"(?i)^(test|it)[_-]?\d+$|^test_(ok|works|fine|good|basic|simple|pass|passes|it|thing)$"
+    r"(?i)^(test|it)[_-]?\d+$|^test_(ok|works|fine|good|basic|simple|pass|passes|it|kind)$"
     r"|^works$|^test$"
+)
+
+TEST_ATTR_RE = re.compile(
+    r"#\[\s*(?:tokio::|async_std::|core::prelude::v1::)?"
+    r"(?:test|bench|rstest|quickcheck|proptest)\b"
 )
 
 
@@ -291,6 +296,7 @@ class FileUnit:
     kind: str  # lib | build | example | test | bench | other
     fns: list[FnInfo]
     test_regions: list[tuple[int, int]]
+    contract_regions: list[tuple[int, int]]  # impl Trait for X / trait blocks
 
 
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*")
@@ -344,6 +350,15 @@ def parse_file(rel: str, path: Path, text: str) -> FileUnit:
             if close_idx > 0:
                 test_regions.append((m.start(), close_idx))
 
+    # Regions where a constant return or an ignored parameter fulfils a
+    # documented contract: `impl Trait for Type` blocks and `trait` blocks
+    # (default methods).
+    contract_regions: list[tuple[int, int]] = []
+    for m in re.finditer(r"\b(?:impl\b[^{};]*\bfor\b[^{};]*|trait\b[^{};]*)\{", masked):
+        close_idx = match_pair(masked, m.end() - 1)
+        if close_idx > 0:
+            contract_regions.append((m.start(), close_idx))
+
     fns: list[FnInfo] = []
     for m in FN_RE.finditer(masked):
         name = m.group(1)
@@ -392,7 +407,7 @@ def parse_file(rel: str, path: Path, text: str) -> FileUnit:
         attr_blob = " ".join(attrs)
         in_test_region = any(a <= m.start() <= b for a, b in test_regions)
         is_test = bool(
-            re.search(r"#\[\s*(?:tokio::|async_std::|core::prelude::v1::)?(?:test|bench|rstest|quickcheck|proptest)\b", attr_blob)
+            TEST_ATTR_RE.search(attr_blob)
             or in_test_region
             or kind == "test"
         )
@@ -404,7 +419,8 @@ def parse_file(rel: str, path: Path, text: str) -> FileUnit:
             is_test=is_test, is_async=is_async, line=line,
         ))
     return FileUnit(rel=rel, path=path, src=src, kind=kind, fns=fns,
-                    test_regions=test_regions)
+                    test_regions=test_regions,
+                    contract_regions=contract_regions)
 
 
 def locate_fn(fns: list[FnInfo], offset: int) -> FnInfo | None:
@@ -621,25 +637,54 @@ def check_r01(unit: FileUnit, out: list[Finding]) -> None:
 
 def check_r02(unit: FileUnit, out: list[Finding]) -> None:
     for fn in unit.fns:
-        if not fn.is_test:
+        # Only functions carrying a real test attribute are tests: helpers
+        # inside test regions cannot be "tests that cannot fail".
+        if not fn.is_test or not TEST_ATTR_RE.search(" ".join(fn.attrs)):
             continue
         body, masked = fn.body, unit.src.masked_all
-        asserts = macro_calls(body, "assert", "assert_eq", "assert_ne")
+        open_idx = masked.find("{", fn.start)
+        raw_body = unit.src.text[open_idx + 1: fn.end] if open_idx >= 0 else body
+        # Assertions are compared with their string literals visible: masked
+        # literals make distinct asserts look identical (false duplicates) and
+        # hide failure messages from the roulette check.
+        asserts = macro_calls(mask_source(raw_body, False, True),
+                              "assert", "assert_eq", "assert_ne")
         has_panic = bool(re.search(r"\b(panic!|unreachable!)\s*\(", body))
         returns_result = "Result" in fn.sig
         has_try = bool(re.search(r"\?\s*;", body))
-        if not asserts and not has_panic and not (returns_result and has_try):
-            out.append(Finding(
-                "R02", "high",
-                f"Test `{fn.name}` has no assertion or oracle (empty/unknown test: it cannot fail).",
-                unit.rel, fn.line, fn.name, evidence="no assert*/panic! in body",
-                fix="none",
-                fix_hint="Assert an observable behaviour; a test that cannot fail proves nothing.",
-            ))
+        # #[should_panic]: the panic IS the oracle. unwrap()/expect() panic on
+        # bad behaviour, so they are oracles too ("cannot fail" would be wrong).
+        should_panic = any("should_panic" in a for a in fn.attrs)
+        has_unwrap = bool(re.search(r"\.(?:unwrap|expect)\s*\(", body))
+        if not asserts and not has_panic and not should_panic \
+                and not has_unwrap and not (returns_result and has_try):
+            if "(" not in body:
+                # No call and no oracle: the test literally cannot fail.
+                out.append(Finding(
+                    "R02", "high",
+                    f"Test `{fn.name}` cannot fail (empty body: no call, no assertion).",
+                    unit.rel, fn.line, fn.name, evidence="no call, no oracle in body",
+                    fix="none",
+                    fix_hint="Assert an observable behaviour; a test that cannot fail proves nothing.",
+                ))
+            else:
+                # It calls helpers whose assertions may be the oracle; the tool
+                # cannot see through the call, so it reports only what is true.
+                out.append(Finding(
+                    "R02", "low",
+                    f"Test `{fn.name}` has no direct oracle in its body "
+                    f"(assertions may live in helpers: verify it can fail).",
+                    unit.rel, fn.line, fn.name, evidence="no assert*/panic! in body",
+                    fix="none",
+                    fix_hint="Assert an observable behaviour here, or rely on the "
+                             "helper's assertions knowingly.",
+                ))
         for _, start, _, args in asserts:
             compact = re.sub(r"\s+", " ", args).strip()
+            # Bare `false` is NOT tautological: in #[should_panic] tests it is
+            # the "fail if we got here" guard. Only always-PASSING forms count.
             if re.fullmatch(
-                    r"true|false|true\s*==\s*true|false\s*==\s*false|1\s*==\s*1|0\s*==\s*0",
+                    r"true|true\s*==\s*true|false\s*==\s*false|1\s*==\s*1|0\s*==\s*0",
                     compact) or re.fullmatch(r"(.+?)\s*,\s*\1", compact):
                 out.append(Finding(
                     "R02", "high",
@@ -655,10 +700,12 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
                 unit.rel, fn.line, fn.name, evidence=fn.name, fix="none",
                 fix_hint="Rename to `test_<behaviour>_<condition>_<expected>`.",
             ))
-        # assertion roulette: 3+ assertions without custom messages
+        # Assertion roulette: 3+ bare `assert!` without messages. In Rust,
+        # assert_eq!/assert_ne! print left/right values and every panic
+        # carries file:line, so they cannot be roulette.
         no_msg = 0
-        for _, _, _, args in asserts:
-            if not re.search(r",\s*\"", args):
+        for name, _, _, args in asserts:
+            if name == "assert" and not re.search(r",\s*\"", args):
                 no_msg += 1
         if no_msg >= 3:
             out.append(Finding(
@@ -703,19 +750,24 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
     for fn in unit.fns:
         if fn.is_test or unit.kind in ("example", "bench"):
             continue
-        body = fn.body.strip()
-        if not body:
+        masked = unit.src.masked_all
+        open_idx = masked.find("{", fn.start)
+        raw_body = unit.src.text[open_idx + 1: fn.end] if open_idx >= 0 else fn.body
+        # Only a truly empty `{}` is a stub: a body carrying a comment is a
+        # documented no-op and a literal body is a real return value.
+        if not raw_body.strip():
             out.append(Finding(
                 "R03", "high", f"Function `{fn.name}` has an empty body (stub).",
                 unit.rel, fn.line, fn.name, evidence="{}", fix="none",
                 fix_hint="Implement the function or make it return a typed 'unsupported' error.",
             ))
             continue
-        masked = unit.src.masked_all
-        open_idx = masked.find("{", fn.start)
-        raw_body = unit.src.text[open_idx + 1: fn.end] if open_idx >= 0 else fn.body
         visible = mask_source(raw_body, False, True)  # strings visible, comments hidden
-        if re.fullmatch(
+        # In `impl Trait for Type` blocks and `trait` default methods a
+        # constant return fulfils the documented contract (metadata getters,
+        # deliberate defaults), not stubbed logic.
+        in_contract = any(a <= fn.start <= b for a, b in unit.contract_regions)
+        if not in_contract and re.fullmatch(
                 r"(?:return\s+)?(?:true|false|-?\d+(?:\.\d+)?[a-z]*|\"[^\"\n]*\"|"
                 r"'(?:\\.|[^\\'])'|Self|[A-Z][A-Z0-9_]{2,})\s*;?",
                 visible.strip()):
@@ -733,8 +785,11 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
                 unit.rel, fn.line, fn.name, evidence="if false {", fix="none",
                 fix_hint="Remove the placeholder branch or wire the real feature flag.",
             ))
-        params = re.findall(r"(?:^|,)\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:", fn.sig.split("(", 1)[-1])
-        params = [p for p in params if p not in ("self",)]
+        # (?!:) keeps `S::Error`-style return types from inventing params;
+        # underscore-prefixed params are intentional ignores, not stubs.
+        params = re.findall(r"(?:^|,)\s*(?:mut\s+)?([A-Za-z_]\w*)\s*:(?!:)",
+                            fn.sig.split("(", 1)[-1])
+        params = [p for p in params if p not in ("self",) and not p.startswith("_")]
         if params and len(re.findall(r"\w+", fn.body)) < 30:
             missing = [p for p in params if not re.search(r"\b" + re.escape(p) + r"\b", fn.body)]
             if len(missing) == len(params):

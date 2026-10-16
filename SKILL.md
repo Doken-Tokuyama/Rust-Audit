@@ -79,8 +79,8 @@ disk full? concurrency? 8. prove stubs/fakes exist only in tests.
 | ID | Detects | Severity | Fix |
 |---|---|---|---|
 | R01 | `todo!()`, `unimplemented!()`, `panic!("not implemented")`, empty fn body | critical (prod) / info (tests) | none |
-| R02 | fake tests (Test Smells Catalog 2.0): no oracle, tautologies (`assert!(true)`, `assert_eq!(2,2)`), generic names (`test_ok`), assertion roulette, magic numbers, duplicate asserts, 3+ `#[ignore]` | high/low | none |
-| R03 | stubbed logic: constant return, all params ignored, `if false` placeholder branch | high | none |
+| R02 | fake tests (Test Smells Catalog 2.0), judged only on real test functions (helpers excluded): no oracle (high only when the body cannot fail; helper-delegating tests get low "no direct oracle"), tautologies (`assert!(true)`, `assert_eq!(2,2)`; not `assert!(false)`, the `#[should_panic]` guard), generic names (`test_ok`), assertion roulette (bare `assert!` only — Rust's `assert_eq!`/`assert_ne!` print values + line), magic numbers, duplicate asserts (literals compared verbatim), 3+ `#[ignore]` | high/low | none |
+| R03 | stubbed logic outside trait contracts (`impl X for Y` and `trait` default methods return constants by design): truly empty body `{}`, constant return, all params ignored (`_`-prefixed params are intentional), `if false` placeholder branch | high | none |
 | R04 | placeholder data as real (`"lorem ipsum"`, `example.com`, `dummy`) in production | high | none |
 | R05 | demo code (`demo*`/`sample*`/`placeholder*` names, trivial `fn main`) | medium/info | none |
 | R06 | `Fake*`/`Mock*`/`InMemory*` types outside test code | medium | none |
@@ -181,6 +181,10 @@ verification + similarity + reputation signals are the reliable core.
 - Fix validation requires a compilable project; on intentionally broken targets
   edits are applied without compile validation — the tool reports that
   explicitly.
+- R02 "no oracle" cannot see through helper calls: tests whose assertions live
+  in helpers are reported at low severity as "no direct oracle" — verify those
+  by hand. R03 exempts trait contracts (`impl X for Y`, `trait` defaults), so a
+  stubbed default method is reported only via its other signals.
 
 ## License
 
