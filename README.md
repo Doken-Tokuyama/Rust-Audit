@@ -10,10 +10,10 @@ Python 3.11+ stdlib only — no dependencies. English output.
 ## Quick start
 
 ```bash
-python3 scripts/rust_ai_audit.py selftest
-python3 scripts/rust_ai_audit.py scan  <rust-project> --format terminal,md,json,sarif --fail-on high
-python3 scripts/rust_ai_audit.py fix   <rust-project> --dry-run
-python3 scripts/rust_ai_audit.py cargo <rust-project> --deep --supply-chain
+python3 scripts/rust_audit.py selftest
+python3 scripts/rust_audit.py scan  <rust-project> --format terminal,md,json,sarif --fail-on high
+python3 scripts/rust_audit.py fix   <rust-project> --dry-run
+python3 scripts/rust_audit.py cargo <rust-project> --deep --supply-chain
 ```
 
 Exit codes: `0` clean · `1` findings at/above `--fail-on` · `2` execution error.

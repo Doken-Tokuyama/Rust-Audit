@@ -16,13 +16,13 @@ hallucinated crates", "fix these findings", or invokes `Rust Audit`.
 ```bash
 # 0) best-effort install of the optional evidence tools
 #    (cargo-mutants, cargo-llvm-cov, cargo-udeps, guarddog, osv-scanner, miri, typomania)
-python3 scripts/rust_ai_audit.py setup
+python3 scripts/rust_audit.py setup
 
-python3 scripts/rust_ai_audit.py scan <rust-project> \
+python3 scripts/rust_audit.py scan <rust-project> \
     --format terminal,md,json,sarif --fail-on high
-python3 scripts/rust_ai_audit.py fix  <rust-project> --dry-run
-python3 scripts/rust_ai_audit.py cargo <rust-project> --deep --supply-chain
-python3 scripts/rust_ai_audit.py selftest
+python3 scripts/rust_audit.py fix  <rust-project> --dry-run
+python3 scripts/rust_audit.py cargo <rust-project> --deep --supply-chain
+python3 scripts/rust_audit.py selftest
 ```
 
 Exit codes: `0` clean · `1` findings at/above `--fail-on` · `2` execution error
@@ -155,7 +155,7 @@ triage; combine signals before declaring a defect.
 `templates/` contains: `github-workflow.yml` (scan + SARIF upload +
 `cargo test --locked` + audit/deny/vet + zizmor self-check + Scorecard +
 artifact attestations), `deny.toml` (only crates.io, deny yanked/banned), 
-`rust-ai-audit.toml` (thresholds, disabled rules, corpus), `dependabot.yml`,
+`rust-audit.toml` (thresholds, disabled rules, corpus), `dependabot.yml`,
 `pre-commit-config.yaml`, `ast-grep/` (structural rewrite rules for the optional
 ast-grep backend). Pin third-party Actions to full commit SHAs before enabling.
 
@@ -163,7 +163,7 @@ ast-grep backend). Pin third-party Actions to full commit SHAs before enabling.
 
 `resources/popular_crates.txt` (typosquat baseline) and
 `resources/suspicious_names.txt` (slopsquatting corpus seed). Both are
-pluggable: point `corpus = "..."` in `rust-ai-audit.toml` at your organization's
+pluggable: point `corpus = "..."` in `rust-audit.toml` at your organization's
 private list of known-hallucinated names. No public list of hallucinated names
 exists (the USENIX Security 2025 study withheld its 205k names), so registry
 verification + similarity + reputation signals are the reliable core.

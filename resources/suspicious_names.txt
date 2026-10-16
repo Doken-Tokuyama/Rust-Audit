@@ -2,7 +2,7 @@
 # patterns that LLMs invent (arxiv 2606.08444, USENIX Sec 2025 package
 # hallucination study) and that attackers register (slopsquatting).
 # Extend with your organization's private list via `corpus = "..."` in
-# rust-ai-audit.toml. Also matched by pattern in the engine:
+# rust-audit.toml. Also matched by pattern in the engine:
 #   ^(rust|async|simple|easy|smart|fast)[-_].*   and   .*[-_](utils?|helpers?|extensions?|extra|lite|lib|core)$
 rust-http-client
 rust-database

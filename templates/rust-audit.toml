@@ -1,5 +1,5 @@
 # Rust Audit configuration.
-# Copy to the root of the audited project as `rust-ai-audit.toml`.
+# Copy to the root of the audited project as `rust-audit.toml`.
 
 [rules]
 # Disable rules by id (prefixes work: "R18" disables all dependency rules).

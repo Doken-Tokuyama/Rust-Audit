@@ -5,7 +5,7 @@ repos:
     hooks:
       - id: rust-audit
         name: Rust Audit (stubs, fake tests, fake deps)
-        entry: python3 skills/Rust-Audit/scripts/rust_ai_audit.py scan .
+        entry: python3 skills/Rust-Audit/scripts/rust_audit.py scan .
         language: system
         pass_filenames: false
         args: ["--format", "terminal", "--fail-on", "high"]

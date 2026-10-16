@@ -29,7 +29,7 @@ jobs:
           python-version: "3.11"
       - name: Scan for stubs, fake tests and fake dependencies
         run: |
-          python3 skills/Rust-Audit/scripts/rust_ai_audit.py scan . \
+          python3 skills/Rust-Audit/scripts/rust_audit.py scan . \
             --format terminal,md,json,sarif --out report --fail-on high
       - name: Upload SARIF to GitHub Code Scanning
         if: always()

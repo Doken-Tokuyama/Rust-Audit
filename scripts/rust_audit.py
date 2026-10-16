@@ -1467,7 +1467,7 @@ def load_config(root: Path, explicit: str | None) -> dict:
     candidates = []
     if explicit:
         candidates.append(Path(explicit))
-    candidates += [root / "rust-ai-audit.toml", root / ".rust-ai-audit.toml"]
+    candidates += [root / "rust-audit.toml", root / ".rust-audit.toml"]
     for candidate in candidates:
         if candidate.exists():
             try:
@@ -2188,7 +2188,7 @@ SELFTEST_EXPECT = ["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09"
 
 
 def cmd_selftest(_args) -> int:
-    with tempfile.TemporaryDirectory(prefix="rust-ai-audit-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="rust-audit-") as tmp:
         root = Path(tmp)
         (root / "src").mkdir()
         (root / "Cargo.toml").write_text(SELFTEST_CARGO, encoding="utf-8")
@@ -2221,23 +2221,23 @@ TOOL_INVENTORY: list[tuple[str, str, str, str]] = [
     ("cargo-mutants",
      "Mutation testing: proves whether tests can fail (detects tests that prove nothing)",
      "R02 evidence",
-     "python rust_ai_audit.py setup  (or: cargo install cargo-mutants), then `cargo --deep`"),
+     "python rust_audit.py setup  (or: cargo install cargo-mutants), then `cargo --deep`"),
     ("cargo-llvm-cov",
      "Coverage: prioritise stub functions that no test ever exercises",
      "R01/R03 evidence",
-     "python rust_ai_audit.py setup  (or: cargo install cargo-llvm-cov), then `cargo --deep`"),
+     "python rust_audit.py setup  (or: cargo install cargo-llvm-cov), then `cargo --deep`"),
     ("cargo-udeps",
      "Unused-dependency confirmation (declared but never used)",
      "R18e evidence",
-     "python rust_ai_audit.py setup  (or: cargo install cargo-udeps; run with `cargo +nightly udeps`)"),
+     "python rust_audit.py setup  (or: cargo install cargo-udeps; run with `cargo +nightly udeps`)"),
     ("guarddog",
      "Malicious-crate scan of Cargo.lock (source + metadata heuristics)",
      "R19 evidence",
-     "python rust_ai_audit.py setup  (or: pipx install guarddog), then `cargo --supply-chain`"),
+     "python rust_audit.py setup  (or: pipx install guarddog), then `cargo --supply-chain`"),
     ("osv-scanner",
      "OSV advisory scan of the dependency tree",
      "R19 evidence",
-     "python rust_ai_audit.py setup  (or install from https://github.com/google/osv-scanner/releases)"),
+     "python rust_audit.py setup  (or install from https://github.com/google/osv-scanner/releases)"),
     ("cargo-miri",
      "Undefined-behaviour detection for unsafe code (use-after-free, aliasing, ...)",
      "R11 evidence",
@@ -2417,7 +2417,7 @@ def write_gap_report(out_dir: Path, cmd: str, target: str,
             attempt = str(a.get("attempt", "—"))
             lines.append(f"| {a['tool']} | `{attempt}` | {result} |")
     else:
-        lines.append("(no install attempts in this run — use `python rust_ai_audit.py setup`)")
+        lines.append("(no install attempts in this run — use `python rust_audit.py setup`)")
 
     cargo_ok, cargo_ver = _run_probe(["cargo", "--version"])
     lines += [
@@ -2662,7 +2662,7 @@ def _add_common(p) -> None:
     p.add_argument("--fail-on", default="high", choices=list(SEVERITY_RANK),
                    help="exit 1 when findings reach this severity")
     p.add_argument("--rules", help="only these rule ids (comma list, prefixes ok)")
-    p.add_argument("--config", help="path to rust-ai-audit.toml")
+    p.add_argument("--config", help="path to rust-audit.toml")
     p.add_argument("--exclude", help="extra exclude globs (comma list)")
     p.add_argument("--strict", action="store_true", help="fail on medium and above")
     p.add_argument("--no-gap-report", action="store_true",
