@@ -32,3 +32,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: bash scripts/verify_release.sh "$RELEASE_TAG"
+      - name: Keep the verification receipt with the run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-release-receipt
+          path: report/verify-release-*.json
+          if-no-files-found: ignore
