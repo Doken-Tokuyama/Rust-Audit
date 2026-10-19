@@ -77,14 +77,15 @@ with the download (fingerprint `SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNm
 release@rust-audit namespaces="file" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDAhVju61wmyPVI9EQiBN5nr8AyTTDSJ2YpxENURDUxAlGHWmBsFocMLHacjl2upKgP2R4jBwQ9gvhByQt0NllM87kFJstufjWv01vukk4G9IP/wtV5Xypqp6ZvvcDGNf6mJR1h1T2YZi6EtaQobGgxjteZvJBvRESltv03chfxti1bP3SWvlTcFEIKpKiSKoRzdDItWH5VMMxSZHoKtsESBY9WlbPg++IVReYhukmGarMoyX3nHAuXk8RHoHK+9YfHz5kG/s2p9xLsxHramoiWfhbrqAqBNxVYwiNcwsQlMQEU3L5Xx/eXFHpFwBneSNc7k+ZUDjaCDZAyiN5Nj7Ol
 ```
 
-This line is also shipped as the `allowed_signers` release asset. Verify
-(needs only `ssh-keygen` and a checksum tool — both preinstalled on
-macOS/Linux):
+This line is also shipped as the `allowed_signers` release asset. Verify —
+downloads need `gh` (private repository) or an authenticated `curl`; the
+verification itself needs only `ssh-keygen` and a checksum tool, both
+preinstalled on macOS/Linux:
 
 ```bash
-BASE=https://github.com/Doken-Tokuyama/Rust-Audit/releases/download/v0.2.0
-for f in rust_audit.py SHA256SUMS SHA256SUMS.sig allowed_signers; do curl -fsSLO "$BASE/$f"; done
-ssh-keygen -lf allowed_signers   # must show SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU
+gh release download v0.2.0 -R Doken-Tokuyama/Rust-Audit   # all four assets
+sed 's/.*ssh-rsa/ssh-rsa/' allowed_signers | ssh-keygen -lf -
+#   must show SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU
 ssh-keygen -Y verify -f allowed_signers -I release@rust-audit -n file -s SHA256SUMS.sig < SHA256SUMS
 shasum -a 256 -c SHA256SUMS      # Linux: sha256sum -c SHA256SUMS
 ```
