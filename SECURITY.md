@@ -77,10 +77,24 @@ with the download (fingerprint `SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNm
 release@rust-audit namespaces="file" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDAhVju61wmyPVI9EQiBN5nr8AyTTDSJ2YpxENURDUxAlGHWmBsFocMLHacjl2upKgP2R4jBwQ9gvhByQt0NllM87kFJstufjWv01vukk4G9IP/wtV5Xypqp6ZvvcDGNf6mJR1h1T2YZi6EtaQobGgxjteZvJBvRESltv03chfxti1bP3SWvlTcFEIKpKiSKoRzdDItWH5VMMxSZHoKtsESBY9WlbPg++IVReYhukmGarMoyX3nHAuXk8RHoHK+9YfHz5kG/s2p9xLsxHramoiWfhbrqAqBNxVYwiNcwsQlMQEU3L5Xx/eXFHpFwBneSNc7k+ZUDjaCDZAyiN5Nj7Ol
 ```
 
-This line is also shipped as the `allowed_signers` release asset. Verify —
-downloads need `gh` (private repository) or an authenticated `curl`; the
-verification itself needs only `ssh-keygen` and a checksum tool, both
-preinstalled on macOS/Linux:
+This line is also shipped as the `allowed_signers` release asset.
+
+One command — downloads the assets and runs the whole chain (key pin →
+signature → checksum → tag identity), exit 0 only on `VERIFIED`:
+
+```bash
+scripts/verify_release.sh v0.2.0        # one release (default: latest)
+scripts/verify_release.sh --all         # every release from v0.2.0 onward
+scripts/verify_release.sh v0.2.0 ./rust_audit.py   # + the local copy to execute
+```
+
+CI runs the same chain automatically after every published release
+(`.github/workflows/verify-release.yml`) and fails the job on any mismatch;
+the same job can be dispatched by hand for any tag.
+
+The same chain by hand — downloads need `gh` (private repository) or an
+authenticated `curl`; the verification itself needs only `ssh-keygen` and a
+checksum tool, both preinstalled on macOS/Linux:
 
 ```bash
 gh release download v0.2.0 -R Doken-Tokuyama/Rust-Audit   # all four assets

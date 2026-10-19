@@ -13,6 +13,18 @@ hallucinated crates", "fix these findings", or invokes `Rust Audit`.
 
 ## Quick start
 
+**Verify before use:** when `rust_audit.py` arrives as a release download,
+run the attestation chain against the exact file you are about to execute
+and proceed only on `VERIFIED` (exit `0`) — key pin → SSH signature →
+checksum → tag identity, plus your local copy against the signed manifest:
+
+```bash
+scripts/verify_release.sh v0.2.0 ./rust_audit.py
+```
+
+The chain and the pinned signing key live in
+[SECURITY.md](SECURITY.md#release-attestation-v020--verify-the-exact-audited-bytes).
+
 ```bash
 # 0) best-effort install of the optional evidence tools
 #    (cargo-mutants, cargo-llvm-cov, cargo-udeps, guarddog, osv-scanner, miri, typomania)
