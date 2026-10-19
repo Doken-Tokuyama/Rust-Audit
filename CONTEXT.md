@@ -97,3 +97,22 @@ _Avoid_: autofix as an unbounded rewrite
 
 **Rollback** (revertido):
 The transactional revert of an applied fix whose validation failed.
+
+### Release evidence
+
+**Verification receipt** (recibo de verificación):
+The machine-readable JSON record of one release verification — tag, mode,
+per-check status, result and exit code — kept under `report/` and attached
+to the release and the CI run.
+_Avoid_: log, attestation (that word is the SSH signature chain)
+
+**Pre-publish gate** (gate de pre-publicación):
+The verification that must end `VERIFIED` on the staged assets before
+anything is uploaded — the only path to upload in `release.sh`.
+_Avoid_: CI check (the CI run re-verifies *after* publishing)
+
+**Attested release** (release atestiguada):
+A release whose assets carry the SSH-signed SHA256SUMS chain (key pin ->
+signature -> checksum -> tag identity), pinned key in the repo —
+[ADR 0003](docs/adr/0003-evidence-model-receipts-gate-attestation.md).
+_Avoid_: signed release (the tag itself is not signed)
