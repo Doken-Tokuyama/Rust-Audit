@@ -36,7 +36,13 @@ import subprocess
 import sys
 import tempfile
 import time
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    sys.stderr.write(
+        "ERROR Rust Audit needs Python 3.11+ (tomllib); this interpreter is "
+        f"{sys.version.split()[0]}. Re-run with python3.13, python3.12 or python3.11.\n")
+    raise SystemExit(2)
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field

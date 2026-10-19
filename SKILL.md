@@ -25,6 +25,9 @@ scripts/verify_release.sh v0.2.0 ./rust_audit.py
 The chain and the pinned signing key live in
 [SECURITY.md](SECURITY.md#release-attestation-v020--verify-the-exact-audited-bytes).
 
+Runs on Python **3.11+**: when `python3 --version` is older (macOS ships
+3.9), run the tool with `python3.13`, `python3.12` or `python3.11`.
+
 ```bash
 # 0) best-effort install of the optional evidence tools
 #    (cargo-mutants, cargo-llvm-cov, cargo-udeps, guarddog, osv-scanner, miri, typomania)
