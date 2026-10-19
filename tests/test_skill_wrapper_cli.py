@@ -111,9 +111,11 @@ def account_registry():
 
 
 def test_registry_instructions_match_the_skill_files():
-    """The sync embeds SKILL.md into current.json stripping exactly one
-    trailing newline (documented in docs/freebuff-account-skills-sync.md);
-    any other difference — stale content riding an old revision — is drift."""
+    """The sync embeds SKILL.md into current.json, stripping (currently) one
+    trailing newline (docs/freebuff-account-skills-sync.md). The embed must
+    equal the file with or without that newline — zero difference is not
+    drift — and any other difference (stale content riding an old revision)
+    is."""
     import json
 
     current = account_registry()
@@ -125,10 +127,11 @@ def test_registry_instructions_match_the_skill_files():
         if name not in entries:
             continue   # not an account skill here
         expected = canonical.read_bytes()
+        allowed = {expected}
         if expected.endswith(b"\n"):
-            expected = expected[:-1]   # the sync strips exactly this byte
+            allowed.add(expected[:-1])   # the newline the sync strips
         embedded = entries[name]["instructions"].encode()
-        assert embedded == expected, (
+        assert embedded in allowed, (
             f"{current} embeds drifted instructions for {name} — the only "
             f"allowed difference is the stripped trailing newline; see "
             f"docs/freebuff-account-skills-sync.md")

@@ -31,7 +31,8 @@ Under `account-skills/<account-hash>/<…>/`:
   (`instructions == SKILL.md[:-1]` for both rust-audit skills — verified
   byte for byte). File-level copies keep the newline; the registry embed
   does not. That is harmless *as long as it stays the only difference* —
-  which is what the test below pins.
+  the guard accepts the file with or without that newline (zero difference
+  is not drift) and flags any other difference.
 - **`imported.json` history (the `.bak` trail):** the pre-sync backup
   (13:52) held 20 names with `veyra-proof` but without `rust-audit` /
   `rust-audit-family`; the current file holds 21 with the two new imports
@@ -49,9 +50,10 @@ Under `account-skills/<account-hash>/<…>/`:
    snapshot per account** must be byte-identical (trailing newline
    included). Older snapshots are rollback archives and are excluded.
 2. `test_registry_instructions_match_the_skill_files` — the registry
-   embed in `current.json` must equal `SKILL.md` minus the one trailing
-   newline the sync strips. Any other difference (the stale pre-fix
-   content that once rode an old snapshot) fails here.
+   embed in `current.json` must equal `SKILL.md`, with or without the one
+   trailing newline the sync strips (a retained newline is zero drift, not
+   a failure). Any other difference (the stale pre-fix content that once
+   rode an old snapshot) fails here.
 
 ## Runbook when either test fires
 
