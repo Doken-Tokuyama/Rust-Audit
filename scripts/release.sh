@@ -21,9 +21,12 @@
 # 2. upload — only after the gate: gh release create (or gh release upload
 #    when the release already exists) of the four staged assets, followed by
 #    the gate's JSON receipt as evidence.
+# 3. post-publish chain — the full verification (incl. the receipt
+#    cross-check of the just-attached receipt) re-runs on the uploaded
+#    bytes; RELEASED is printed only when it ends on VERIFIED.
 #
-# Exit: 0 released · 1 the gate refused the staged assets · 2 environment/
-#       usage error
+# Exit: 0 released · 1 the gate refused the staged assets, or the uploaded
+#       bytes failed the post-publish chain · 2 environment/usage error
 # Needs: gh (authenticated — the repository is private) plus what
 #        verify_release.sh needs for --dir (ssh-keygen, git, shasum/sha256sum).
 
@@ -111,4 +114,10 @@ fi
 [ -n "$receipt" ] && [ -f "$receipt" ] || die "the gate left no verification receipt to attach"
 gh release upload "$TAG" -R "$REPO" "$receipt" \
   || die "receipt upload failed for $TAG"
-say "RELEASED  $REPO $TAG — staged assets passed the pre-publish gate, are uploaded, and the receipt is attached."
+
+say "Post-publish chain on the uploaded bytes (incl. the attached receipt cross-check)"
+if ! bash "$SCRIPT_DIR/verify_release.sh" "$TAG"; then
+  say "NOT VERIFIED  $TAG is uploaded but failed the post-publish chain — do not trust the assets." >&2
+  exit 1
+fi
+say "RELEASED  $REPO $TAG — pre-publish gate passed, the receipt is attached, and the uploaded bytes passed the post-publish chain."

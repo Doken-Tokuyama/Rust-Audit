@@ -37,6 +37,11 @@ case "$1" in
       for r in "$RA_FIXTURES"/verify-release-*.json; do   # an attached receipt
         [ -f "$r" ] && cp "$r" "$dest/"
       done
+      if [ -n "${RA_SERVE_RECEIPTS:-}" ]; then   # serve what the gate "uploaded"
+        for r in "$RA_RECEIPT_DIR"/verify-release-*.json; do
+          [ -f "$r" ] && cp "$r" "$dest/"
+        done
+      fi
       if [ "$tag" = "${RA_UNATTESTED_TAG:-}" ]; then
         rm -f "$dest/SHA256SUMS" "$dest/SHA256SUMS.sig" "$dest/allowed_signers"
       fi
@@ -475,6 +480,26 @@ def test_release_requires_every_staged_asset(release):
     assert r.returncode == 2
     assert "are missing allowed_signers" in r.stderr
     assert not (fx / "gh-calls.log").exists()
+
+
+def test_release_cross_checks_the_attached_receipt_before_declaring(release):
+    fx, verify, _ = release
+    r = run_release(verify, "v0.0.0-test", str(fx), RA_SERVE_RECEIPTS="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Post-publish chain on the uploaded bytes" in r.stdout
+    assert "receipt: the attached receipt matches this verification" in r.stdout
+    assert (r.stdout.index("Post-publish chain")
+            < r.stdout.index("receipt: the attached receipt")
+            < r.stdout.index("RELEASED  Doken-Tokuyama"))   # only after it
+
+
+def test_post_publish_failure_withholds_the_release_message(release):
+    fx, verify, _ = release
+    r = run_release(verify, "v0.0.0-test", str(fx), RA_TAMPER_TAG="v0.0.0-test")
+    assert r.returncode == 1
+    assert "failed the post-publish chain" in r.stderr
+    assert "RELEASED  Doken-Tokuyama" not in r.stdout   # never declared released
+    assert "verify-release-" in (fx / "gh-calls.log").read_text()  # receipt went up
 
 
 # ------------------------------------------------- release.sh --cut mode

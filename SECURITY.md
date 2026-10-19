@@ -127,9 +127,12 @@ then runs the **pre-publish gate**: `verify_release.sh --dir` must end on
 against the git tag (the release is not published yet) — before anything is
 uploaded (`gh release create --verify-tag`, or `gh release upload` when the
 release already exists). The gate's JSON receipt is attached to the release
-as evidence (and stays under `report/`); the post-release CI workflow
-re-runs the same chain on the published bytes and keeps its receipt with
-the run. `release.sh TAG STAGEDIR` serves pre-staged assets: same gate,
+as evidence (and stays under `report/`); then `release.sh` itself re-runs
+the chain on the uploaded bytes — including the cross-check of the
+just-attached receipt — and prints `RELEASED` only on `VERIFIED` (an upload
+that fails it is reported as uploaded-but-not-trusted). The post-release CI
+workflow re-runs the same chain once more and keeps its receipt with the
+run. `release.sh TAG STAGEDIR` serves pre-staged assets: same gate,
 same upload rule.
 
 The same chain by hand — downloads need `gh` (private repository) or an
