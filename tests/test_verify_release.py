@@ -397,3 +397,76 @@ def test_release_requires_every_staged_asset(release):
     assert r.returncode == 2
     assert "are missing allowed_signers" in r.stderr
     assert not (fx / "gh-calls.log").exists()
+
+
+# ------------------------------------------------- release.sh --cut mode
+
+
+def make_cut_repo(path, keytype, keydata):
+    """A repo wired for --cut: VERSION, verify-before-use pins, the fixture's
+    allowed_signers line, and a bare origin to push to."""
+    (path / "scripts").mkdir(parents=True)
+    (path / "scripts" / "rust_audit.py").write_text(
+        'VERSION = "0.2.0"\nprint("audited bytes")\n')
+    (path / "README.md").write_text(
+        "```bash\nscripts/verify_release.sh v0.2.0 ./rust_audit.py\n```\n")
+    (path / "SKILL.md").write_text(
+        "scripts/verify_release.sh v0.2.0 ./rust_audit.py\n")
+    (path / "SECURITY.md").write_text(
+        f'release@rust-audit namespaces="file" {keytype} {keydata}\n')
+    cmd("git", "init", "-q", path)
+    cmd("git", "-C", path, "config", "user.email", "test@example.com")
+    cmd("git", "-C", path, "config", "user.name", "test")
+    cmd("git", "-C", path, "add", "-A")
+    cmd("git", "-C", path, "commit", "-qm", "base")
+    origin = path.parent / (path.name + "-origin.git")
+    cmd("git", "init", "-q", "--bare", origin)
+    cmd("git", "-C", path, "remote", "add", "origin", origin)
+    return origin
+
+
+def cut_setup(tmp_path):
+    keytype, keydata = (tmp_path / "key.pub").read_text().split()[:2]
+    repo = tmp_path / "cutrepo"
+    return repo, make_cut_repo(repo, keytype, keydata)
+
+
+def test_cut_releases_in_one_command(release, tmp_path):
+    fx, verify, _ = release
+    repo, origin = cut_setup(tmp_path)
+    r = run_release(verify, "--cut", "v9.9.9", str(tmp_path / "key"),
+                    RA_REPO_ROOT=str(repo))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'VERSION = "9.9.9"' in (repo / "scripts" / "rust_audit.py").read_text()
+    for doc in ("README.md", "SKILL.md"):
+        assert "verify_release.sh v9.9.9" in (repo / doc).read_text()
+    assert cmd("git", "-C", origin, "rev-parse", "v9.9.9").returncode == 0
+    calls = (fx / "gh-calls.log").read_text()
+    assert "release create v9.9.9" in calls
+    attached = [line for line in calls.splitlines()
+                if "release upload v9.9.9" in line and "verify-release-" in line]
+    assert attached, f"the receipt was not uploaded: {calls}"
+    assert receipts(tmp_path / "report")   # and kept under report/
+
+
+def test_cut_gate_failure_blocks_the_upload(release, tmp_path):
+    fx, verify, _ = release
+    repo, _ = cut_setup(tmp_path)
+    r = run_release(verify, "--cut", "v9.9.9", str(tmp_path / "key"),
+                    RA_REPO_ROOT=str(repo), RA_EXPECT_FINGERPRINT="")
+    assert r.returncode == 1
+    assert "NOT RELEASED" in r.stderr
+    assert not (fx / "gh-calls.log").exists()   # nothing reached gh
+
+
+def test_cut_needs_the_public_half_next_to_the_key(release, tmp_path):
+    fx, verify, _ = release
+    repo, _ = cut_setup(tmp_path)
+    lone = tmp_path / "lone.key"
+    lone.write_text((tmp_path / "key").read_text())
+    r = run_release(verify, "--cut", "v9.9.9", str(lone),
+                    RA_REPO_ROOT=str(repo))
+    assert r.returncode == 2
+    assert "needs the public half next to the private key" in r.stderr
+    assert 'VERSION = "0.2.0"' in (repo / "scripts" / "rust_audit.py").read_text()  # nothing mutated
+    assert not (fx / "gh-calls.log").exists()

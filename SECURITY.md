@@ -102,25 +102,25 @@ the same job can be dispatched by hand for any tag.
 ### Cutting a release — the pre-publish gate
 
 The release process verifies the **staged assets before anything is
-uploaded**. The four attestation assets are prepared into a staging
-directory and signed, then one command gates and uploads:
+uploaded**. One command cuts the whole release:
 
 ```bash
-mkdir -p dist && cp scripts/rust_audit.py dist/
-printf '%s\n' '<the allowed_signers line pinned above>' > dist/allowed_signers
-( cd dist && shasum -a 256 rust_audit.py > SHA256SUMS )  # Linux: sha256sum
-ssh-keygen -Y sign -f <signing-key> -n file -I release@rust-audit dist/SHA256SUMS
-scripts/release.sh v0.2.0 ./dist
+scripts/release.sh --cut v0.2.2 <signing-key>
 ```
 
-`release.sh` refuses to upload unless `verify_release.sh --dir` ends on
+It bumps `VERSION`, moves the verify-before-use pins in README.md and
+SKILL.md to the new tag, commits, tags and pushes (refusing any commit that
+carries a co-author trailer), stages the four attestation assets (manifest
++ SSH signature with `<signing-key>` — its `.pub` must sit next to it), and
+then runs the **pre-publish gate**: `verify_release.sh --dir` must end on
 `VERIFIED` (exit 0) — key pin -> signature -> checksum -> tag identity
-against the **local git tag** (the release is not published yet) — and only
-then creates the release and uploads the four assets
-(`gh release create --verify-tag`, or `gh release upload` when the release
-already exists). The gate's JSON receipt lands under `report/` as the
-pre-publish evidence; the post-release CI workflow re-runs the same chain on
-the published bytes.
+against the git tag (the release is not published yet) — before anything is
+uploaded (`gh release create --verify-tag`, or `gh release upload` when the
+release already exists). The gate's JSON receipt is attached to the release
+as evidence (and stays under `report/`); the post-release CI workflow
+re-runs the same chain on the published bytes and keeps its receipt with
+the run. `release.sh TAG STAGEDIR` serves pre-staged assets: same gate,
+same upload rule.
 
 The same chain by hand — downloads need `gh` (private repository) or an
 authenticated `curl`; the verification itself needs only `ssh-keygen` and a
