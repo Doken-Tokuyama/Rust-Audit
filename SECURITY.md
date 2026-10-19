@@ -86,11 +86,41 @@ signature → checksum → tag identity), exit 0 only on `VERIFIED`:
 scripts/verify_release.sh v0.2.0        # one release (default: latest)
 scripts/verify_release.sh --all         # every release from v0.2.0 onward
 scripts/verify_release.sh v0.2.0 ./rust_audit.py   # + the local copy to execute
+scripts/verify_release.sh --dir dist v0.2.0        # staged assets, before upload
 ```
+
+Every verification writes a **machine-readable receipt per release** —
+`report/verify-release-<tag>-<utc>.json` (override the directory with
+`RA_RECEIPT_DIR`) — carrying the mode, the per-check status, the result and
+the exit code. The receipts stay under `report/` as the evidence trail of
+what was verified, when, and with which outcome.
 
 CI runs the same chain automatically after every published release
 (`.github/workflows/verify-release.yml`) and fails the job on any mismatch;
 the same job can be dispatched by hand for any tag.
+
+### Cutting a release — the pre-publish gate
+
+The release process verifies the **staged assets before anything is
+uploaded**. The four attestation assets are prepared into a staging
+directory and signed, then one command gates and uploads:
+
+```bash
+mkdir -p dist && cp scripts/rust_audit.py dist/
+printf '%s\n' '<the allowed_signers line pinned above>' > dist/allowed_signers
+( cd dist && shasum -a 256 rust_audit.py > SHA256SUMS )  # Linux: sha256sum
+ssh-keygen -Y sign -f <signing-key> -n file -I release@rust-audit dist/SHA256SUMS
+scripts/release.sh v0.2.0 ./dist
+```
+
+`release.sh` refuses to upload unless `verify_release.sh --dir` ends on
+`VERIFIED` (exit 0) — key pin -> signature -> checksum -> tag identity
+against the **local git tag** (the release is not published yet) — and only
+then creates the release and uploads the four assets
+(`gh release create --verify-tag`, or `gh release upload` when the release
+already exists). The gate's JSON receipt lands under `report/` as the
+pre-publish evidence; the post-release CI workflow re-runs the same chain on
+the published bytes.
 
 The same chain by hand — downloads need `gh` (private repository) or an
 authenticated `curl`; the verification itself needs only `ssh-keygen` and a

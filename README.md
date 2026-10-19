@@ -10,6 +10,11 @@ Python 3.11+ stdlib only — no dependencies. English output.
 ## Quick start
 
 ```bash
+# 0) verify before use — check the exact audited bytes before executing them
+#    (key pin -> SSH signature -> checksum -> tag identity) and proceed only
+#    on VERIFIED (exit 0); see SECURITY.md for the pinned key and the chain
+scripts/verify_release.sh v0.2.0 ./rust_audit.py
+
 python3 scripts/rust_audit.py selftest
 python3 scripts/rust_audit.py scan  <rust-project> --format terminal,md,json,sarif --fail-on high
 python3 scripts/rust_audit.py fix   <rust-project> --dry-run
