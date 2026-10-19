@@ -19,7 +19,7 @@ and proceed only on `VERIFIED` (exit `0`) — key pin → SSH signature →
 checksum → tag identity, plus your local copy against the signed manifest:
 
 ```bash
-scripts/verify_release.sh v0.2.1 ./rust_audit.py
+scripts/verify_release.sh v0.2.2 ./rust_audit.py
 ```
 
 The chain and the pinned signing key live in
