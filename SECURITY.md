@@ -80,7 +80,8 @@ release@rust-audit namespaces="file" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDAhVj
 This line is also shipped as the `allowed_signers` release asset.
 
 One command — downloads the assets and runs the whole chain (key pin →
-signature → checksum → tag identity), exit 0 only on `VERIFIED`:
+signature → checksum → tag identity → receipt cross-check), exit 0 only on
+`VERIFIED`:
 
 ```bash
 scripts/verify_release.sh v0.2.0        # one release (default: latest)
@@ -94,6 +95,15 @@ Every verification writes a **machine-readable receipt per release** —
 `RA_RECEIPT_DIR`) — carrying the mode, the per-check status, the result and
 the exit code. The receipts stay under `report/` as the evidence trail of
 what was verified, when, and with which outcome.
+
+**Receipt cross-check** (download mode): when the release carries an
+attached receipt, the verifier compares it against its own fresh
+calculation — tag, repository, key fingerprint, result, and the manifest
+checksum that binds the receipt to the exact bytes. A mismatch fails the
+chain (exit 1): a receipt that contradicts the bytes *is* the tamper
+signal. A missing receipt is reported as `absent` and is not a failure —
+releases predating receipts stay verifiable. See
+[ADR 0003](docs/adr/0003-evidence-model-receipts-gate-attestation.md).
 
 CI runs the same chain automatically after every published release
 (`.github/workflows/verify-release.yml`) and fails the job on any mismatch;

@@ -6,6 +6,9 @@
 #   2. signature    SHA256SUMS.sig is a Good ssh signature over SHA256SUMS
 #   3. checksum     SHA256SUMS matches the downloaded rust_audit.py
 #   4. tag identity rust_audit.py is byte-identical to the tag's scripts/rust_audit.py
+#   5. receipt cross-check the receipt ATTACHED to the release matches this
+#      verification (download mode only; absence is reported as "absent" —
+#      releases predating receipts — and is not a failure)
 #
 # Usage: scripts/verify_release.sh [TAG | --all] [FILE]
 #        scripts/verify_release.sh --dir DIR TAG
@@ -27,7 +30,10 @@
 # Every run writes a machine-readable receipt per release —
 # report/verify-release-<tag>-<utc>.json (override the directory with
 # RA_RECEIPT_DIR) — with the mode, the per-check status, the result and the
-# exit code: the verification evidence kept under report/.
+# exit code: the verification evidence kept under report/. In download mode
+# the receipt ATTACHED to the release is cross-checked against the fresh
+# calculation (tag, repo, key fingerprint, result, and the manifest checksum
+# that binds the receipt to the exact bytes): a mismatch fails with exit 1.
 #
 # The pinned fingerprint is the trust anchor and lives here (and in
 # SECURITY.md) on purpose — never in the download. RA_EXPECT_FINGERPRINT
@@ -66,6 +72,10 @@ json_escape() {
 CHECKS=""
 chk() {  # chk ID STATUS DETAIL — accumulate one receipt line
   CHECKS="$CHECKS${CHECKS:+,}{\"id\":\"$1\",\"status\":\"$2\",\"detail\":\"$(json_escape "$3")\"}"
+}
+
+receipt_field() {  # receipt_field FILE KEY — one string field of the flat JSON
+  sed -n "s/.*\"$2\" *: *\"\([^\"]*\)\".*/\1/p" "$1" | head -1
 }
 
 write_receipt() {  # write_receipt TAG MODE RESULT EXIT_CODE -> prints the path
@@ -247,6 +257,38 @@ verify_release() {
     chk tag_identity fail "rust_audit.py differs from $TAG:scripts/rust_audit.py"
     fail "$LBL rust_audit.py differs from $TAG:scripts/rust_audit.py"
     finish "$TAG" "$LBL" "NOT VERIFIED" 1; return $?
+  fi
+
+  # 5. receipt cross-check — an attached receipt that contradicts this
+  #    calculation is exactly the tamper signal; absence is neutral
+  if [ "$VMODE" = "download" ]; then
+    local RFILE ATT_TAG ATT_REPO ATT_FP ATT_RES ATT_CK exp_ck
+    RFILE=$(ls "$WORKDIR"/verify-release-*.json 2>/dev/null | head -1)
+    if [ -n "$RFILE" ]; then
+      ATT_TAG=$(receipt_field "$RFILE" tag)
+      ATT_REPO=$(receipt_field "$RFILE" repo)
+      ATT_FP=$(receipt_field "$RFILE" fingerprint_expected)
+      ATT_RES=$(receipt_field "$RFILE" result)
+      ATT_CK=$(sed -n 's/.*"id" *: *"checksum" *, *"status" *: *"[a-z]*" *, *"detail" *: *"\([^"]*\)".*/\1/p' "$RFILE" | head -1 | sed 's/\\n//g')
+      exp_ck=$(tr -d '\n' < "$ASSET_DIR/SHA256SUMS")
+      if [ "$ATT_TAG" = "$TAG" ] && [ "$ATT_REPO" = "$REPO" ] \
+         && [ "$ATT_FP" = "$PINNED_FINGERPRINT" ] && [ "$ATT_RES" = "VERIFIED" ] \
+         && [ -n "$ATT_CK" ] && [ "$ATT_CK" = "$exp_ck" ] \
+         && grep -Eq '"id" *: *"key_pin" *, *"status" *: *"pass"' "$RFILE" \
+         && grep -Eq '"id" *: *"signature" *, *"status" *: *"pass"' "$RFILE" \
+         && grep -Eq '"id" *: *"checksum" *, *"status" *: *"pass"' "$RFILE" \
+         && grep -Eq '"id" *: *"tag_identity" *, *"status" *: *"pass"' "$RFILE"; then
+        chk receipt pass "the attached receipt matches this verification"
+        pass "receipt: the attached receipt matches this verification"
+      else
+        chk receipt fail "the attached receipt does not match this verification"
+        fail "the attached receipt does not match this verification"
+        finish "$TAG" "$LBL" "NOT VERIFIED" 1; return $?
+      fi
+    else
+      chk receipt absent "no receipt attached to $TAG (predates receipts)"
+      say "receipt: absent (no receipt attached to $TAG)"
+    fi
   fi
 
   finish "$TAG" "$LBL" "VERIFIED" 0 || return 2

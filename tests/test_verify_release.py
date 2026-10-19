@@ -34,6 +34,9 @@ case "$1" in
       for f in rust_audit.py SHA256SUMS SHA256SUMS.sig allowed_signers; do
         [ -f "$RA_FIXTURES/$f" ] && cp "$RA_FIXTURES/$f" "$dest/"
       done
+      for r in "$RA_FIXTURES"/verify-release-*.json; do   # an attached receipt
+        [ -f "$r" ] && cp "$r" "$dest/"
+      done
       if [ "$tag" = "${RA_UNATTESTED_TAG:-}" ]; then
         rm -f "$dest/SHA256SUMS" "$dest/SHA256SUMS.sig" "$dest/allowed_signers"
       fi
@@ -305,9 +308,14 @@ def test_receipt_is_written_per_release(release, tmp_path):
     assert receipt["result"] == "VERIFIED"
     assert receipt["exit_code"] == 0
     assert receipt["fingerprint_expected"].startswith("SHA256:")
+    # Deliberate format update (ADR 0003): the checks list gained the
+    # "receipt" cross-check of the release-attached receipt (download mode).
     assert [c["id"] for c in receipt["checks"]] == [
-        "assets", "key_pin", "signature", "checksum", "tag_identity"]
-    assert all(c["status"] == "pass" for c in receipt["checks"])
+        "assets", "key_pin", "signature", "checksum", "tag_identity", "receipt"]
+    chain = {c["id"]: c["status"] for c in receipt["checks"]}
+    assert all(chain[i] == "pass" for i in
+               ("assets", "key_pin", "signature", "checksum", "tag_identity"))
+    assert chain["receipt"] == "absent"   # fixtures attach no receipt
     assert str(paths[0]) in r.stdout   # the receipt path is printed
 
 
@@ -319,7 +327,8 @@ def test_receipt_records_local_file_check(release, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     receipt = json.loads(receipts(tmp_path / "report")[0].read_text())
     assert [c["id"] for c in receipt["checks"]] == [
-        "assets", "key_pin", "signature", "checksum", "local_file", "tag_identity"]
+        "assets", "key_pin", "signature", "checksum", "local_file",
+        "tag_identity", "receipt"]
 
 
 def test_receipt_records_the_failing_check(release, tmp_path):
@@ -351,6 +360,75 @@ def test_batch_writes_one_receipt_per_release(release, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     got = {json.loads(p.read_text())["tag"] for p in receipts(tmp_path / "report")}
     assert got == {"v0.2.1", "v0.2.0"}
+
+
+def write_attached_receipt(fx, verify, *, result="VERIFIED", tag="v0.0.0-test",
+                           fingerprint=None, checksum_detail=None):
+    """The receipt the gate would have attached to this release."""
+    sums = (fx / "SHA256SUMS").read_text()
+    receipt = {
+        "tool": "verify_release.sh",
+        "repo": "Doken-Tokuyama/Rust-Audit",
+        "tag": tag,
+        "mode": "staged-dir",
+        "verified_at": "2026-01-01T00:00:00Z",
+        "identity": "release@rust-audit",
+        "fingerprint_expected": fingerprint or verify.env["RA_EXPECT_FINGERPRINT"],
+        "checks": [{"id": i, "status": "pass", "detail": d}
+                   for i, d in (("assets", ""), ("key_pin", ""),
+                                ("signature", ""),
+                                ("checksum", sums if checksum_detail is None
+                                 else checksum_detail),
+                                ("tag_identity", ""))],
+        "result": result,
+        "exit_code": 0 if result == "VERIFIED" else 1,
+    }
+    (fx / "verify-release-v0.0.0-test-20260101-000000.json").write_text(
+        json.dumps(receipt))
+
+
+def fresh_checks(verify):
+    report = Path(verify.env["RA_RECEIPT_DIR"])
+    return {c["id"]: c["status"] for c in
+            json.loads(sorted(report.glob("verify-release-*.json"))[-1]
+                       .read_text())["checks"]}
+
+
+def test_attached_receipt_matching_the_chain_is_cross_checked(release):
+    fx, verify, _ = release
+    write_attached_receipt(fx, verify)
+    r = verify()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "receipt: the attached receipt matches this verification" in r.stdout
+    assert fresh_checks(verify)["receipt"] == "pass"
+
+
+def test_tampered_attached_receipt_fails(release):
+    fx, verify, _ = release
+    for tamper in ({"result": "NOT VERIFIED"},
+                   {"checksum_detail": "0" * 64 + "  rust_audit.py\n"}):
+        write_attached_receipt(fx, verify, **tamper)
+        r = verify()
+        assert r.returncode == 1, tamper
+        assert "does not match this verification" in r.stderr
+        assert "VERIFIED" not in r.stdout
+
+
+def test_missing_attached_receipt_is_reported_absent(release):
+    fx, verify, _ = release
+    r = verify()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "receipt: absent" in r.stdout
+    assert fresh_checks(verify)["receipt"] == "absent"
+
+
+def test_staged_mode_has_no_receipt_cross_check(release):
+    fx, verify, _ = release
+    write_attached_receipt(fx, verify)   # a release cannot attach one yet
+    r = verify("--dir", str(fx), "v0.0.0-test")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "receipt:" not in r.stdout
+    assert "receipt" not in fresh_checks(verify)
 
 
 # --------------------------------------------------- release.sh (the gate)
