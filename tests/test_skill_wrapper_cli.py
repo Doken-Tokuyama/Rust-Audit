@@ -99,3 +99,36 @@ def test_skill_copies_are_byte_identical():
                 f"{copy} drifted from {canonical} — skill copies must be "
                 f"byte-identical (including the trailing newline); restore "
                 f"it from skills/{name}/")
+
+
+def account_registry():
+    """The live Freebuff registry (current.json) next to the snapshots."""
+    if not ACCOUNT_SKILLS.exists():
+        return None
+    for current in sorted(ACCOUNT_SKILLS.glob("**/current.json")):
+        return current
+    return None
+
+
+def test_registry_instructions_match_the_skill_files():
+    """The sync embeds SKILL.md into current.json stripping exactly one
+    trailing newline (documented in docs/freebuff-account-skills-sync.md);
+    any other difference — stale content riding an old revision — is drift."""
+    import json
+
+    current = account_registry()
+    if current is None:
+        return   # no Freebuff on this machine
+    registry = json.loads(current.read_text())
+    entries = {s["name"]: s for s in registry["settings"]["skills"]}
+    for name, canonical, _ in skill_copies():
+        if name not in entries:
+            continue   # not an account skill here
+        expected = canonical.read_bytes()
+        if expected.endswith(b"\n"):
+            expected = expected[:-1]   # the sync strips exactly this byte
+        embedded = entries[name]["instructions"].encode()
+        assert embedded == expected, (
+            f"{current} embeds drifted instructions for {name} — the only "
+            f"allowed difference is the stripped trailing newline; see "
+            f"docs/freebuff-account-skills-sync.md")
