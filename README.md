@@ -26,6 +26,9 @@ Every run writes a **not-executed report** (`report/not-executed-<date>.md`)
 listing the checks that could not run and how to enable them — read it before
 calling an audit complete.
 
+As a Freebuff agent skill: install `rust-audit` into Freebuff on any machine
+by following [docs/freebuff-skill-install.md](docs/freebuff-skill-install.md).
+
 ## Tests
 
 Production E2E suite: the real CLI audited against real Rust workspaces
