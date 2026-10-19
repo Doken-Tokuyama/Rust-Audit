@@ -43,6 +43,15 @@ what leaves the machine (opt-in `--online` registry/OSV lookups only) and
 what writes to disk (transactional `fix`). See [SECURITY.md](SECURITY.md) —
 including the notes for static skill auditors.
 
+Release assets are **SSH-signed**: an install can verify it has the exact
+audited `rust_audit.py` with preinstalled `ssh-keygen` alone — commands and
+the pinned signing key live in [SECURITY.md](SECURITY.md#release-attestation-v020--verify-the-exact-audited-bytes).
+
+Hardened scanners can enforce the static-only contract in code: every
+subcommand accepts **`--no-exec`**, under which process creation is
+impossible (one guarded entry point refuses every spawn) and each check that
+would have executed is recorded as *skipped* in the not-executed report.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). © 2026 Doken-Tokuyama.

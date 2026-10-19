@@ -14,6 +14,11 @@ Subcommands:
            coverage, OSV, guarddog, ...); missing tools are "skipped"
     full   scan + cargo merged report
     selftest built-in rule smoke test
+
+Every subcommand accepts --no-exec (static-only mode): no process is ever
+spawned (zero-subprocess guarantee enforced at the single _spawn() entry
+point), and every check that would have executed is recorded as skipped in
+the not-executed report.
 """
 from __future__ import annotations
 
@@ -37,11 +42,33 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 TOOL_NAME = "Rust Audit"
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+
+# --------------------------------------------------------------------------
+# Process-execution choke point. EVERY external command in this tool goes
+# through _spawn() — the single subprocess.run call site of the whole file —
+# so `--no-exec` (static-only mode) is a zero-subprocess guarantee enforced
+# in code, not by convention: with the flag set, no path can create a process.
+# `shutil.which` is pure PATH lookup (no execution) and stays allowed.
+# --------------------------------------------------------------------------
+NO_EXEC = False  # set from --no-exec in main()
+EXEC_BLOCKED_NOTE = "--no-exec: static-only mode (zero-subprocess guarantee)"
+
+
+class ExecBlocked(RuntimeError):
+    """A process spawn was requested while --no-exec (static-only) is active."""
+
+
+def _spawn(argv: list[str], *, cwd: Path, timeout: int):
+    """The one and only subprocess.run call site of Rust Audit."""
+    if NO_EXEC:
+        raise ExecBlocked(" ".join(argv))
+    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout)
 
 # --------------------------------------------------------------------------
 # Rule catalog. fix: "safe" (auto-applicable), "assisted" (diff proposal
@@ -1318,9 +1345,12 @@ def check_crate_refs(units: list[FileUnit], reg: Registry, out: list[Finding]) -
             continue
         if _norm(root) in {_norm(p) for p in popular}:
             continue
-        # near-miss against declared deps and popular crates
+        # near-miss against declared deps and popular crates; sorted() in each
+        # group: `known`/`popular` are sets (hash-randomized order), so ties
+        # at equal edit distance must resolve deterministically (declared
+        # deps keep priority over popular crates).
         best, best_dist = None, 99
-        for cand in list(known) + [_norm(p) for p in popular]:
+        for cand in sorted(known) + sorted(_norm(p) for p in popular):
             if cand == _norm(root):
                 continue  # never compare a name against itself
             d = levenshtein(_norm(root), cand)
@@ -1393,12 +1423,16 @@ def check_crate_refs(units: list[FileUnit], reg: Registry, out: list[Finding]) -
                 ))
 
     # typosquat similarity (R20)
+    # sorted(): `popular` is a set, so its iteration order is hash-randomized
+    # per process; without a stable order, equal-distance candidates (fst ~
+    # csv vs fst ~ pest) flip between runs and the report is not reproducible.
+    pop_sorted = sorted(popular)
     for dep in reg.deps:
         name = _norm(dep.package)
         if name in {_norm(p) for p in popular}:
             continue
         best, best_dist = None, 99
-        for p in popular:
+        for p in pop_sorted:
             d = levenshtein(name, _norm(p))
             if d < best_dist:
                 best, best_dist = p, d
@@ -2003,14 +2037,16 @@ def run_validators(root: Path, budget: int = 600) -> list[EvidenceRun]:
                        ("cargo test", ["cargo", "test"])]:
         t0 = time.time()
         try:
-            proc = subprocess.run(argv, cwd=root, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=budget)
+            proc = _spawn(argv, cwd=root, timeout=budget)
             excerpt = ((proc.stdout or "") + (proc.stderr or ""))[-3000:]
             runs.append(EvidenceRun(name, " ".join(argv),
                                     "pass" if proc.returncode == 0 else "fail",
                                     proc.returncode, time.time() - t0, excerpt))
             if proc.returncode != 0:
                 break
+        except ExecBlocked:
+            runs.append(EvidenceRun(name, " ".join(argv), "skipped",
+                                    notes=EXEC_BLOCKED_NOTE))
         except Exception as exc:
             runs.append(EvidenceRun(name, " ".join(argv), "error", None,
                                     time.time() - t0, str(exc)))
@@ -2068,11 +2104,13 @@ def run_safe_fixes(root: Path, findings: list[Finding], units: list[FileUnit],
         if use_cargo and shutil.which("cargo") and (root / "Cargo.toml").exists():
             def _fixer(argv: list[str]) -> None:
                 try:
-                    proc = subprocess.run(argv, cwd=root, capture_output=True, text=True,
-                                          encoding="utf-8", errors="replace", timeout=900)
+                    proc = _spawn(argv, cwd=root, timeout=900)
                     report["evidence"].append(EvidenceRun(
                         argv[1], " ".join(argv), "pass" if proc.returncode == 0 else "fail",
                         proc.returncode, excerpt=((proc.stdout or "") + (proc.stderr or ""))[-1500:]))
+                except ExecBlocked:
+                    report["evidence"].append(EvidenceRun(argv[1], " ".join(argv), "skipped",
+                                                          notes=EXEC_BLOCKED_NOTE))
                 except Exception as exc:
                     report["evidence"].append(EvidenceRun(argv[1], " ".join(argv), "error",
                                                           notes=str(exc)))
@@ -2125,9 +2163,10 @@ def _run_cmd(argv: list[str], cwd: Path, timeout: int) -> tuple[int | None, str,
     t0 = time.time()
     try:
         # utf-8 + replace: cargo emits UTF-8 progress output that breaks cp1252
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout)
+        proc = _spawn(argv, cwd=cwd, timeout=timeout)
         return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")), time.time() - t0
+    except ExecBlocked:
+        return None, f"skipped: {EXEC_BLOCKED_NOTE}", 0.0
     except FileNotFoundError:
         return None, "", 0.0
     except subprocess.TimeoutExpired:
@@ -2166,6 +2205,10 @@ def collect_evidence(root: Path, deep: bool = False, supply_chain: bool = False,
                      findings: list[Finding] | None = None) -> list[EvidenceRun]:
     findings = findings if findings is not None else []
     runs: list[EvidenceRun] = []
+    if NO_EXEC:
+        runs.append(EvidenceRun("cargo pipeline", "(all evidence tools)", "skipped",
+                                notes=EXEC_BLOCKED_NOTE))
+        return runs
     if not (root / "Cargo.toml").exists():
         runs.append(EvidenceRun("cargo", "cargo", "skipped", notes="no Cargo.toml in target"))
         return runs
@@ -2473,6 +2516,10 @@ def _load_attempts(out_dir: Path) -> list[dict]:
 
 
 def _run_probe(argv: list[str], timeout: int = 25) -> tuple[bool, str]:
+    if NO_EXEC:  # PATH lookup only: never spawn under --no-exec
+        path = shutil.which(argv[0])
+        return path is not None, (f"on PATH, not executed (--no-exec)" if path
+                                  else "not on PATH")
     code, out, _dur = _run_cmd(argv, Path.cwd(), timeout)
     if code is None:
         return False, "runner not available"
@@ -2482,6 +2529,15 @@ def _run_probe(argv: list[str], timeout: int = 25) -> tuple[bool, str]:
 
 def collect_tool_rows() -> list[dict]:
     """Probe the optional tooling once (cheap) for the not-executed report."""
+    if NO_EXEC:  # presence via PATH lookup only — probing would spawn processes
+        rows = []
+        for tool_id, purpose, rules, hint in TOOL_INVENTORY:
+            where = shutil.which(tool_id)
+            rows.append({"tool": tool_id, "purpose": purpose, "rules": rules,
+                         "status": (f"not probed (--no-exec); on PATH: {where}" if where
+                                    else "not probed (--no-exec); not on PATH"),
+                         "enable": hint})
+        return rows
     installed_cargo_bins: dict[str, str] = {}
     if shutil.which("cargo"):
         code, out, _ = _run_cmd(["cargo", "install", "--list"], Path.cwd(), 30)
@@ -2537,6 +2593,12 @@ def write_gap_report(out_dir: Path, cmd: str, target: str,
 
     lines += ["", "## Checks not executed in this run", ""]
     not_run: list[tuple[str, str]] = []
+    if NO_EXEC:
+        not_run.append((
+            "ALL process execution: cargo evidence pipeline, fix compile "
+            "validation, setup installs",
+            "remove `--no-exec` (this static-only mode enforces the "
+            "zero-subprocess guarantee)"))
     if not flags.get("online"):
         not_run.append((
             "Live registry verification: crate existence, yanked versions, feature "
@@ -2607,9 +2669,11 @@ def cmd_setup(args) -> int:
             attempts.append({"tool": tool_id, "attempt": "—", "result": "already installed"})
             print(f"  [ok]      {tool_id}: already installed")
             continue
-        if args.dry_run:
+        if args.dry_run or NO_EXEC:
             shown = " | ".join(" ".join(s) for s in strategies)
-            attempts.append({"tool": tool_id, "attempt": shown, "result": "dry-run: not attempted"})
+            result = ("dry-run: not attempted" if args.dry_run
+                      else "skipped: " + EXEC_BLOCKED_NOTE)
+            attempts.append({"tool": tool_id, "attempt": shown, "result": result})
             print(f"  [plan]    {tool_id}: would try: {shown}")
             continue
         done = False
@@ -2824,6 +2888,10 @@ def _add_common(p) -> None:
     p.add_argument("--strict", action="store_true", help="fail on medium and above")
     p.add_argument("--no-gap-report", action="store_true",
                    help="do not write the dated not-executed checks report")
+    p.add_argument("--no-exec", action="store_true",
+                   help="static-only mode: never spawn a process (zero-subprocess "
+                        "guarantee enforced in code; pipeline/validator runs are "
+                        "recorded as skipped)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2881,12 +2949,18 @@ def main(argv: list[str] | None = None) -> int:
                          help="attempt install even if already present")
     p_setup.add_argument("--dry-run", action="store_true",
                          help="show what would be attempted, install nothing")
+    p_setup.add_argument("--no-exec", action="store_true",
+                         help="static-only mode: never spawn a process")
     p_setup.set_defaults(func=cmd_setup)
 
     p_self = sub.add_parser("selftest", help="built-in rule smoke test")
+    p_self.add_argument("--no-exec", action="store_true",
+                        help="accepted for uniformity; selftest never spawns anyway")
     p_self.set_defaults(func=cmd_selftest)
 
     args = parser.parse_args(argv)
+    global NO_EXEC
+    NO_EXEC = bool(getattr(args, "no_exec", False))
     return args.func(args)
 
 

@@ -407,3 +407,95 @@ def test_fix_is_transactional_and_idempotent_on_production_code(workspaces, tmp_
     p2 = run("fix", str(ws), timeout=1800)
     assert p2.returncode == 0, p2.stdout + p2.stderr
     assert snapshot(ws) == after, "second fix run must apply nothing"
+
+
+# --------------------------------------------------------------------------
+# --no-exec (static-only mode): the zero-subprocess guarantee, proven in code.
+# --------------------------------------------------------------------------
+def load_tool_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rust_audit_under_test", TOOL)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod  # dataclass annotation resolution needs this
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_subprocess_funnelled_through_single_guarded_entry_point():
+    # The guarantee is structural, not conventional: subprocess.run must have
+    # exactly one call site (_spawn), and that entry point must refuse to
+    # spawn when --no-exec is active. Any new direct spawn call breaks this.
+    src = TOOL.read_text(encoding="utf-8")
+    assert src.count("subprocess.run(") == 1, \
+        "every process spawn must go through the _spawn() choke point"
+    window = src[src.index("def _spawn("):][:800]
+    assert "if NO_EXEC:" in window and "raise ExecBlocked" in window, \
+        "_spawn() must refuse to spawn under --no-exec"
+
+
+def test_no_exec_is_a_zero_subprocess_guarantee_in_code(tmp_path, monkeypatch):
+    # Poison BOTH spawn primitives: if any code path creates a process under
+    # --no-exec, this test fails with AssertionError instead of passing quietly.
+    mod = load_tool_module()
+
+    def boom(*_a, **_k):
+        raise AssertionError("process spawned under --no-exec")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+
+    ws = tmp_path / "crate"
+    (ws / "src").mkdir(parents=True)
+    (ws / "Cargo.toml").write_text(
+        '[package]\nname = "noexec"\nversion = "0.1.0"\nedition = "2021"\n')
+    (ws / "src" / "lib.rs").write_text(
+        'use fs::File;\npub fn open(path: &str) -> Option<File> '
+        '{ File::open(path).ok() }\n')
+
+    # scan: the static verdict is unchanged (R18b high) and must still gate
+    rc = mod.main(["scan", str(ws), "--no-exec", "--format", "json",
+                   "--out", str(tmp_path / "scan"), "--fail-on", "high"])
+    assert rc == 1
+    data = report(tmp_path / "scan")
+    assert any(f["rule_id"] == "R18b" for f in data["findings"])
+    gap = next((tmp_path / "scan").glob("not-executed-*.md")).read_text()
+    assert "--no-exec" in gap and "zero-subprocess" in gap, \
+        "the not-executed report must name the mode and its guarantee"
+
+    # cargo evidence pipeline: nothing runs and that is recorded, not faked
+    assert mod.main(["cargo", str(ws), "--no-exec", "--out",
+                     str(tmp_path / "cargo"), "--no-gap-report"]) == 0
+
+    # fix: static edits still apply; compile validation is skipped, not faked
+    assert mod.main(["fix", str(ws), "--no-exec", "--out",
+                     str(tmp_path / "fix"), "--no-gap-report"]) == 0
+    assert (ws / "src" / "lib.rs").read_text().startswith("use std::fs::File;"), \
+        "the safe R18b fix must still apply in static-only mode"
+
+    # full: merged run of the repaired crate passes without executing anything
+    assert mod.main(["full", str(ws), "--no-exec", "--out",
+                     str(tmp_path / "full"), "--no-gap-report"]) == 0
+
+    # selftest and setup accept the flag uniformly (setup installs nothing)
+    assert mod.main(["selftest", "--no-exec"]) == 0
+    assert mod.main(["setup", str(ws), "--no-exec", "--out",
+                     str(tmp_path / "setup")]) == 0
+    attempts = json.loads(next((tmp_path / "setup").glob("setup-attempts-*.json")).read_text())
+    assert attempts and all("--no-exec" in a["result"] for a in attempts), \
+        "setup must record skipped installs, never attempt them"
+
+    # boundary: the exit-code-2 contract is unchanged by --no-exec
+    assert mod.main(["scan", str(tmp_path / "missing"), "--no-exec",
+                     "--no-gap-report"]) == 2
+
+
+def test_scan_no_exec_matches_scan_verdict_on_production_code(scanned, project, tmp_path):
+    # Static-only mode must be verdict-identical on production code: same exit
+    # code, same summary, byte-same findings as the plain scan.
+    res = scanned[project]
+    p = run("scan", str(res["ws"]), "--no-exec", "--format", "json",
+            "--out", str(tmp_path / "nx"), "--fail-on", "high", "--no-gap-report")
+    assert p.returncode == res["proc"].returncode, p.stdout + p.stderr
+    data = report(tmp_path / "nx")
+    assert data["summary"] == res["data"]["summary"]
+    assert data["findings"] == res["data"]["findings"]
