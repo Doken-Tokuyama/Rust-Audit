@@ -12,6 +12,7 @@ the next drift is diagnosed in minutes.
 
 ```bash
 python3 scripts/check_skill_sync.py            # this machine
+python3 scripts/check_skill_sync.py --all-disk # + ~/.agents/skills and Spotlight
 python3 scripts/check_skill_sync.py ROOT --json  # a copy/tarball, machine-readable
 ```
 
@@ -20,12 +21,28 @@ sha256, which directory that revision names (the live snapshot), which
 directories are rollback archives, the embedded instructions against the
 served files and against this repository's `skills/`, the extra files each
 skill declares, the `imported.json` backup trail with what each step added
-and removed, and the machine-global install copies. Exit codes follow the
-auditor's contract: `0` consistent · `1` findings (instruction drift, a
-registry the sync never materialized, an orphan tree, a missing declared
-file) · `2` execution error (no such root, no account registry, unreadable
-JSON). `tests/test_check_skill_sync.py` pins that contract; the live guard in
-`tests/test_skill_wrapper_cli.py` is this command's verdict.
+and removed, and the machine-global install copies.
+
+**Skills and engines in one verdict.** A skill tree runs its *own*
+`scripts/rust_audit.py`, so up-to-date instructions next to an engine from an
+older release is still a machine that audits with the wrong rules. The
+command therefore calls the copy detector (`sync_installed_copies.py`) in
+process — its `discover`/`snapshot`, not a second implementation — and reports
+every copy it finds under the scanned directories (`current`, `stale`,
+`drift`, `newer`, `unreadable`, plus the instructions a copy still carries
+from an older release). Scope: `ROOT` plus `--engine-root DIR` (repeatable);
+`--all-disk` adds `~/.agents/skills` and every copy Spotlight knows about;
+`--no-engines` leaves the engine half out. Default discovery is bounded to
+the directories given, so a fixture tree (or a tarball) is judged on its own
+contents and never on the machine's.
+
+Exit codes follow the auditor's contract: `0` consistent · `1` findings
+(instruction drift, a registry the sync never materialized, an orphan tree, a
+missing declared file, a stale or drifted engine copy, stale engine
+instructions) · `2` execution error (no such root, no account registry,
+unreadable JSON, no detector beside the checker). `tests/test_check_skill_sync.py`
+pins that contract; the live guard in `tests/test_skill_wrapper_cli.py` is
+this command's verdict.
 
 ## The moving parts
 
@@ -79,7 +96,11 @@ fixtures: consistent tree, both newline-only shapes, stale copy (exit 1,
 skill named), registry with no materialized snapshot, orphan tree, missing
 `SKILL.md`, declared file missing/diverging, the import trail, repo
 cross-check with a stale canonical, terminal rendering, invalid JSON, a
-missing root and an empty root.
+missing root and an empty root. Engine side: a current copy under the root
+(exit 0, `current` in the render), a stale engine (exit 1, version named), a
+current engine beside stale instructions (`engine-docs`), `--no-engines`, and
+`--engine-root` adding a directory (a missing one is exit 2). The fixtures
+plant their own copies, so the machine's copies can never decide the result.
 
 `tests/test_skill_wrapper_cli.py::test_live_copies_serve_the_repo_instructions`
 — the live guard: the command's verdict on this machine must be consistent,
@@ -97,5 +118,12 @@ and the wrappers must actually have been compared (repo vs live snapshot vs
    directory (its name is the hash of bytes you must not rewrite).
 4. **`newline-only`:** not a failure. It is the sync's normalization; no
    action.
-5. Never edit `current.json` or the snapshot dirs by hand — they are
+5. **`engine-stale` / `engine-drift` / `engine-docs`:** a copy of the auditor
+   is behind, patched, or served with old instructions. Run
+   `python3 scripts/sync_installed_copies.py` for the full list and `--fix`
+   to refresh engine, runtime data and docs; a `drift` (same version,
+   different bytes) needs `--force` and a human, because it may be a local
+   patch worth keeping. `--all-disk` on `check_skill_sync.py` is what widens
+   the search beyond the account tree.
+6. Never edit `current.json` or the snapshot dirs by hand — they are
    rewritten wholesale by the sync; edit the repo and re-sync.

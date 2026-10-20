@@ -113,6 +113,11 @@ def test_live_copies_serve_the_repo_instructions():
         + "\n".join(f"  {f['kind']} {f.get('skill', '')}: {f['detail']}"
                     for f in model["findings"]))
     assert code == 0, model["verdict"]
+    # The engine half ran too: a model without it would call a machine with a
+    # stale copy of the auditor "up to date". Canonical must be this checkout.
+    engines = model["engines"]
+    assert Path(engines["canonical"]["path"]) == CHECK_SYNC.parent / "rust_audit.py", \
+        engines["canonical"]
     # Non-vacuous: the wrappers were actually compared with the live surfaces.
     rows = [row for acc in model["accounts"] for row in acc["skills"]]
     for name in SKILLS:

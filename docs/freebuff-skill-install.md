@@ -70,8 +70,10 @@ snapshot does not actually contain the skills), restart Freebuff, and verify
 again.
 
 For the whole sync state at once — registry revision, live snapshot, embed
-against served copies, the `imported.json` trail — run
-`python3 scripts/check_skill_sync.py` and read its verdict
+against served copies, the `imported.json` trail, **and the engine copies the
+trees actually run** — run `python3 scripts/check_skill_sync.py` (add
+`--all-disk` to include `~/.agents/skills` and every copy Spotlight knows
+about) and read its verdict
 ([docs/freebuff-account-skills-sync.md](freebuff-account-skills-sync.md)).
 
 ## Uninstall

@@ -11,19 +11,34 @@ files and against this repository's canonical skills, the extra files each
 skill declares, and the imported.json backup trail with what each sync/verify
 step added and removed.
 
-Usage: scripts/check_skill_sync.py [ROOT] [--repo DIR] [--json]
+It also answers the other half of "is this machine up to date": the **engine
+copies** a skill tree runs. Instructions that name a newer rule are useless
+next to a `scripts/rust_audit.py` left at an older version, so the skill and
+the engine have to be judged together. That half is not re-implemented here:
+the copy detector (`sync_installed_copies.py`) is imported and its own
+`discover`/`snapshot` decide what is current, stale, drifted or out of date
+in its instructions, so the two commands can never disagree.
+
+Usage: scripts/check_skill_sync.py [ROOT] [--repo DIR] [--engine-root DIR]
+                                   [--all-disk] [--no-engines] [--json]
   ROOT  account-skills directory; default $FREEBUFF_ACCOUNT_SKILLS, then
         ~/.config/freebuff-desktop/account-skills
-  --repo DIR   repository whose skills/<name>/SKILL.md are canonical
-               (default: the checkout this script lives in)
-  --json       machine-readable model (same data the terminal output renders)
+  --repo DIR         repository whose skills/<name>/SKILL.md are canonical
+                     (default: the checkout this script lives in)
+  --engine-root DIR  extra directory to scan for engine copies (repeatable)
+  --all-disk         scan further: ~/.agents/skills plus every copy Spotlight
+                     knows about, not just the ones under ROOT
+  --no-engines       skills only: skip the engine copies entirely
+  --json             machine-readable model (same data the terminal renders)
 
 Exit: 0 consistent · 1 findings (instruction drift, a registry the sync never
-      materialized, an orphan skill tree, a missing declared file) ·
-      2 execution error (no such root, no account registry, unreadable JSON).
+      materialized, an orphan skill tree, a missing declared file, a stale or
+      drifted engine copy, stale engine instructions) · 2 execution error (no
+      such root, no account registry, unreadable JSON, no detector to call).
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -235,6 +250,97 @@ def inspect_imports(acc, findings):
             "skills": names, "backups": trail}
 
 
+ENGINE_BAD = {"stale", "drift", "failed", "unreadable"}
+ENGINE_WHY = {
+    "stale": "older than the canonical",
+    "drift": "same version, different bytes",
+    "failed": "a previous refresh could not bring it up to date",
+    "unreadable": "no readable VERSION line",
+}
+
+
+def load_detector():
+    """The copy detector, imported from this checkout instead of re-implemented.
+
+    One definition of "is this copy current" is the whole point: a checker that
+    grew its own version comparison would eventually disagree with the command
+    that fixes the copies.
+    """
+    path = Path(__file__).resolve().parent / "sync_installed_copies.py"
+    if not path.is_file():
+        raise Failure(f"no copy detector at {path}")
+    spec = importlib.util.spec_from_file_location("sync_installed_copies", path)
+    if spec is None or spec.loader is None:
+        raise Failure(f"cannot load the copy detector from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def engine_roots(root, extra, all_disk):
+    """Directories to search, de-duplicated by resolved path, order kept."""
+    wanted = [root, *extra]
+    if all_disk:
+        wanted.append(INSTALL_DIR)
+    seen, out = set(), []
+    for path in (Path(p).expanduser() for p in wanted):
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(path)
+    return out
+
+
+def discover_everywhere(detector, roots):
+    """Copies under `roots` (or the whole disk, via Spotlight when asked)."""
+    found = set()
+    for directory in roots:
+        if directory.is_dir():
+            found.update(detector.discover([directory]))
+    return found
+
+
+def inspect_engines(roots, findings, all_disk=False, engine=None):
+    """Every engine copy in reach, judged by the detector's own rules."""
+    detector = load_detector()
+    canonical = (Path(engine).expanduser().resolve() if engine else
+                 Path(__file__).resolve().parent / detector.ENGINE)
+    if not canonical.is_file():
+        raise Failure(f"no canonical engine at {canonical}")
+    version = detector.version_of(canonical)
+    if version is None:
+        raise Failure(f"{canonical} carries no VERSION")
+    found = discover_everywhere(detector, roots)
+    spotlight = False
+    if all_disk:
+        try:
+            found.update(detector.discover(None))
+            spotlight = True
+        except SystemExit:          # no Spotlight: the bounded scan stands
+            spotlight = False
+    rows = []
+    for copy in sorted(p for p in found if p.resolve() != canonical):
+        row = detector.snapshot(copy, canonical)
+        rows.append(row)
+        if row["status"] in ENGINE_BAD:
+            why = ENGINE_WHY.get(row["status"], row["status"])
+            findings.append(finding(
+                f"engine-{row['status']}",
+                f"{copy} runs {row['version'] or '?'} — {why} "
+                f"{version} at {canonical}"))
+        if row["docs"]:
+            findings.append(finding(
+                "engine-docs",
+                f"{copy.parent.parent} carries stale instructions: "
+                f"{', '.join(row['docs'])}",
+                copy.parent.parent.name))
+    return {"canonical": {"path": str(canonical), "version": version},
+            "roots": [str(p) for p in roots], "spotlight": spotlight,
+            "copies": rows}
+
+
 def inspect_install(repo, findings):
     """The machine-global install copies: also live instructions."""
     if repo is None or not INSTALL_DIR.is_dir():
@@ -254,7 +360,8 @@ def inspect_install(repo, findings):
     return rows
 
 
-def build(root, repo):
+def build(root, repo, engines=True, all_disk=False, extra_roots=(),
+          engine=None):
     if not root.is_dir():
         raise Failure(f"no account-skills directory at {root}")
     accounts = account_dirs(root)
@@ -267,6 +374,10 @@ def build(root, repo):
         model["accounts"].append(entry)
         model["findings"].extend(entry["findings"])
     model["install"] = inspect_install(repo, model["findings"])
+    if engines:
+        model["engines"] = inspect_engines(
+            engine_roots(root, list(extra_roots), all_disk),
+            model["findings"], all_disk=all_disk, engine=engine)
     model["verdict"] = "consistent" if not model["findings"] else "findings"
     return model
 
@@ -325,6 +436,25 @@ def render(model):
         out.append(f"install copies — {INSTALL_DIR}")
         for row in model["install"]:
             out.append(f"  {row['name']:<22} {row['state']}")
+    engines = model.get("engines")
+    if engines:
+        canon = engines["canonical"]
+        out.append("")
+        out.append(f"engines — canonical {canon['version']}  {canon['path']}")
+        scope = ", ".join(engines["roots"])
+        if engines["spotlight"]:
+            scope += " + Spotlight"
+        out.append(f"  scanned        {scope}")
+        if not engines["copies"]:
+            out.append("  copies         none found under the scanned scope"
+                       + ("" if engines["spotlight"] else
+                          " (--all-disk also scans ~/.agents/skills and "
+                          "Spotlight)"))
+        for row in engines["copies"]:
+            out.append(f"  {row['status']:<10} {row['version'] or '?':<8} "
+                       f"{row['path']}")
+            if row["docs"]:
+                out.append(f"             docs: {', '.join(row['docs'])}")
     out.append("")
     findings = model["findings"]
     if not findings:
@@ -347,9 +477,25 @@ def main(argv=None):
                         help="account-skills directory (default: %(default)s)")
     parser.add_argument("--repo", help="checkout whose skills/ are canonical "
                                        "(default: this script's checkout)")
+    parser.add_argument("--engine-root", action="append", default=[],
+                        metavar="DIR",
+                        help="extra directory scanned for engine copies "
+                             "(repeatable)")
+    parser.add_argument("--all-disk", action="store_true",
+                        help="also scan ~/.agents/skills and Spotlight: every "
+                             "engine copy on the machine")
+    parser.add_argument("--no-engines", action="store_true",
+                        help="skills only: leave the engine copies out")
+    parser.add_argument("--engine", metavar="PATH",
+                        help="canonical engine to compare against "
+                             "(default: this checkout's scripts/rust_audit.py)")
     parser.add_argument("--json", action="store_true",
                         help="print the model as JSON")
     args = parser.parse_args(argv)
+    for extra in args.engine_root:
+        if not Path(extra).expanduser().is_dir():
+            print(f"ERROR no such directory: {extra}", file=sys.stderr)
+            return 2
     default_repo = Path(__file__).resolve().parent.parent
     repo = Path(args.repo).expanduser() if args.repo else None
     if repo is not None and not repo.is_dir():
@@ -360,7 +506,9 @@ def main(argv=None):
     if repo is not None:   # accept the checkout root or its skills/ dir
         repo = repo / "skills" if (repo / "skills").is_dir() else repo
     try:
-        model = build(Path(args.root).expanduser(), repo)
+        model = build(Path(args.root).expanduser(), repo,
+                      engines=not args.no_engines, all_disk=args.all_disk,
+                      extra_roots=args.engine_root, engine=args.engine)
     except Failure as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
