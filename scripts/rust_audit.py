@@ -51,6 +51,26 @@ from pathlib import Path
 VERSION = "0.2.5"
 TOOL_NAME = "Rust Audit"
 
+# Identity of the file that is actually running. Two copies of this auditor
+# print the same shapes and the same version string, so a report that does not
+# carry the digest cannot say which engine produced it — the 0.1.0 copy left in
+# a skill tree and the released wheel would look identical.
+_ENGINE_IDENTITY: dict[str, str] | None = None
+
+
+def engine_identity() -> dict[str, str]:
+    """`{version, path, sha256}` of the running module, computed once."""
+    global _ENGINE_IDENTITY
+    if _ENGINE_IDENTITY is None:
+        path = Path(__file__).resolve()
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            digest = "unavailable"
+        _ENGINE_IDENTITY = {"version": VERSION, "path": str(path),
+                           "sha256": digest}
+    return _ENGINE_IDENTITY
+
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
@@ -1776,7 +1796,8 @@ def render_terminal(findings: list[Finding], online_table: list[dict],
                     evidence: list[EvidenceRun], limit: int = 25) -> str:
     lines: list[str] = []
     summary = summarize(findings)
-    lines.append(f"{TOOL_NAME} v{VERSION} — summary: {summary['total']} finding(s)")
+    lines.append(f"{TOOL_NAME} v{VERSION} (sha256 {engine_identity()['sha256'][:12]}…)"
+                 f" — summary: {summary['total']} finding(s)")
     for sev in SEVERITY_ORDER:
         if summary["by_severity"].get(sev):
             lines.append(f"  {sev.upper():8s} {summary['by_severity'][sev]}")
@@ -1810,6 +1831,7 @@ def render_markdown(findings: list[Finding], online_table: list[dict],
         f"# {TOOL_NAME} report — `{target}`",
         "",
         f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')} — tool version {VERSION}",
+        f"Engine: `{engine_identity()['path']}` — sha256 `{engine_identity()['sha256']}`",
         "",
         "## Summary",
         "",
@@ -1876,6 +1898,7 @@ def render_json(findings: list[Finding], online_table: list[dict],
     payload = {
         "tool": TOOL_NAME,
         "version": VERSION,
+        "engine": engine_identity(),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "target": target,
         "summary": summarize(findings),
@@ -1919,6 +1942,8 @@ def render_sarif(findings: list[Finding]) -> str:
             "name": TOOL_NAME,
             "version": VERSION,
             "informationUri": "https://github.com/rust-secure-code/",
+            "properties": {"rustAuditSha256": engine_identity()["sha256"],
+                           "rustAuditPath": engine_identity()["path"]},
             "rules": rules,
         }}, "results": results}],
     }, indent=2)
@@ -2604,7 +2629,8 @@ def write_gap_report(out_dir: Path, cmd: str, target: str,
     lines = [
         f"# {TOOL_NAME} — NOT-EXECUTED checks report ({date})",
         "",
-        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')} — tool {VERSION} — command: `{cmd}` — target: `{target}`",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')} — tool {VERSION} "
+        f"(sha256 {engine_identity()['sha256']}) — command: `{cmd}` — target: `{target}`",
         "",
         "This file lists every check that could **not** be executed in this run",
         "(missing tool, network not used, or feature not requested) together with",
@@ -2670,7 +2696,8 @@ def write_gap_report(out_dir: Path, cmd: str, target: str,
         "", "## Environment", "",
         f"- python: {sys.version.split()[0]} ({sys.platform})",
         f"- cargo: {cargo_ver if cargo_ok else 'NOT INSTALLED'}",
-        f"- {TOOL_NAME}: {VERSION}",
+        f"- {TOOL_NAME}: {VERSION} (sha256 {engine_identity()['sha256']})",
+        f"- engine: {engine_identity()['path']}",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

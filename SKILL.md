@@ -174,6 +174,12 @@ function never exercised); **machete/udeps/dead_code** (stub never called);
 **clippy JSON** (compiler-level confirmation). Static heuristics alone are
 triage; combine signals before declaring a defect.
 
+Every report names the engine that produced it: `version`, `sha256` and path in
+the JSON (`engine`), the markdown header, the SARIF `driver.properties`, the
+terminal banner and the not-executed report. Several copies of the auditor can
+coexist (repo checkout, Cursor store, an installed wheel); the sha256 is what
+tells them apart, so quote it when comparing two reports.
+
 ## CI and templates
 
 `templates/` contains: `github-workflow.yml` (scan + SARIF upload +
