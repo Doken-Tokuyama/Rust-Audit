@@ -63,6 +63,18 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 .venv/bin/python -m pytest tests/
 ```
 
+CI runs exactly that on every push to `main`, every `v*` release tag and every
+pull request (`.github/workflows/tests.yml`: Python 3.11 and 3.13, pytest as
+the only install), so a commit is verified without anyone remembering to type
+it. `tests/test_ci_workflows.py` keeps the job honest: it must exist, it must
+run this suite, it may not swallow a failure, and every action is pinned to
+one commit SHA across all workflows. A second job audits the **published
+artifact**: `python -m build`, install with `--no-index` into a clean venv,
+`rust-audit selftest`, then the golden scan from both the wheel and the
+checkout, which `scripts/check_wheel_parity.py` requires to agree. What the
+jobs prove — and what they do not, including why they cannot block a direct
+push to `main` — is in [docs/ci.md](docs/ci.md).
+
 See [SKILL.md](SKILL.md) for the rule catalog (R01–R21), the auto-fix policy,
 the CI templates and the honest limitations.
 

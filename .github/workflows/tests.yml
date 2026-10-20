@@ -1,0 +1,142 @@
+# The suite on every push to main and every pull request: the production E2E
+# (golden counts on ripgrep and tokio at pinned commits), the packaging
+# contract, the skill-sync guards, the release-script checks and the report
+# identity. Without this job a commit is only verified as far as someone
+# remembers to type `pytest` — and a green manual run proves nothing about the
+# next commit.
+#
+# Nothing but pytest is installed: the tool is one stdlib-only module, so a
+# green run means the code on this commit works, not that some dependency
+# happened to resolve. The suite needs the network (it clones the two pinned
+# workspaces) and git + ssh-keygen (the release-script tests sign with a
+# throwaway key); the hosted runners have all three.
+#
+# Exit status is the verdict: no `|| true`, no `--continue-on-collection-errors`,
+# no filtering of the output through a pipeline that would hide a failure.
+#
+# Action pins: one commit SHA per action across every workflow in this
+# repository, with the version it resolved from as the comment. The SHAs are
+# read from the GitHub API (`git/ref/tags/<version>`), never copied from a
+# blog post; `tests/test_ci_workflows.py` fails when the same action is pinned
+# to two different commits.
+name: tests
+
+on:
+  push:
+    branches: [main]
+    # A release tag is the thing that gets signed and published: the suite must
+    # have run on those exact bytes, not only on the branch they came from.
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A force-push or a quick second commit cancels the superseded run: the verdict
+# that matters is the one on the current head.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor `requires-python` declares, and the newest CPython the
+        # classifiers claim. Everything between them is the same code path.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest
+        run: python -m pip install --upgrade pytest
+      - name: Run the suite
+        run: python -m pytest -q tests/
+      - name: selftest
+        # Also asserted by tests/test_production_e2e.py; run on its own so the
+        # job log names the tool's own check even when the suite fails later.
+        run: python scripts/rust_audit.py selftest
+
+  # AGENTS.md §6b: the published artifact is a path of its own. The wheel finds
+  # its resources through <sys.prefix>/share/rustaudit/ instead of the sibling
+  # `resources/` directory, and nothing in the checkout run proves that works.
+  # So: build, install with no index, selftest the installed command, then scan
+  # the same pinned workspace with both engines and require them to agree — the
+  # wheel's own golden run, plus the parity the release criteria ask for.
+  #
+  # The goldens themselves are not repeated here: the pytest job verified this
+  # engine against them on this commit, so installed == checkout == golden.
+  # In a fresh venv and behind `--no-index`, a missing dist/ or a wheel that
+  # forgot a data file fails loudly instead of falling back to the checkout.
+  wheel:
+    name: wheel (build, install, selftest, golden scan)
+    needs: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build the wheel and sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build --outdir dist
+      - name: Install from dist/ with no index
+        run: |
+          python -m venv "$RUNNER_TEMP/installed"
+          "$RUNNER_TEMP/installed/bin/python" -m pip install \
+            --no-index --find-links dist rust-audit
+          # Where the wheel puts curated data: under the venv prefix, not next
+          # to the module. Empty or absent means dependency detection silently
+          # degraded to the embedded fallbacks.
+          for f in \
+            share/rustaudit/resources/popular_crates.txt \
+            share/rustaudit/resources/suspicious_names.txt \
+            share/rustaudit/templates/deny.toml; do
+            test -s "$RUNNER_TEMP/installed/$f" || {
+              echo "::error::the wheel did not install $f"
+              exit 1
+            }
+          done
+          "$RUNNER_TEMP/installed/bin/rust-audit" --help >/dev/null
+      - name: selftest from the installed command
+        run: |
+          "$RUNNER_TEMP/installed/bin/rust-audit" selftest
+      - name: Fetch the pinned golden workspace
+        # BurntSushi/ripgrep @ 3fce3b5b, the same pin tests/test_production_e2e.py
+        # audits. tokio's golden lives in the pytest job; one workspace is
+        # enough to compare two engines, and the cheap one keeps this job short.
+        run: |
+          git init -q golden
+          git -C golden remote add origin https://github.com/BurntSushi/ripgrep
+          git -C golden fetch -q --depth 1 origin \
+            3fce3b5bb0236da2df6d99672afb8a719642eca7
+          git -C golden checkout -q FETCH_HEAD
+      - name: Golden scan from the wheel and from the checkout
+        run: |
+          # 0 clean, 1 findings at/above --fail-on, 2 execution error. Findings
+          # are expected here (the goldens are 321), so only 2 fails the step;
+          # the parity check below is what decides the verdict.
+          scan() {
+            local rc=0
+            "$@" || rc=$?
+            echo "exit=$rc  $*"
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::$1 exited $rc: the audit did not run"
+              return 1
+            fi
+          }
+          scan "$RUNNER_TEMP/installed/bin/rust-audit" scan golden \
+            --format terminal,md,json,sarif --out report/installed
+          scan python scripts/rust_audit.py scan golden \
+            --format terminal,md,json,sarif --out report/checkout
+      - name: The installed wheel must audit like the checkout
+        run: python scripts/check_wheel_parity.py report/installed report/checkout

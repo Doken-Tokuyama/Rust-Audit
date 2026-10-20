@@ -1,6 +1,7 @@
 # Local-only (never committed, never pushed)
 AGENTS.md
 .freebuff/
+.evoforge/
 
 # Tool caches and audit output
 __pycache__/
