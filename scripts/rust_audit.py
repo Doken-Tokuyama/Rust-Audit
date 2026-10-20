@@ -48,7 +48,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 TOOL_NAME = "Rust Audit"
 
 # Identity of the file that is actually running. Two copies of this auditor
