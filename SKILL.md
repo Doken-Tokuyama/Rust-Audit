@@ -210,7 +210,8 @@ remove provably wrong claims, never rules that work as documented.
 
 ## License
 
-Apache License 2.0 (see `LICENSE`) — © 2026 Doken-Tokuyama.
+Apache License 2.0 (see `LICENSE`) — Copyright (c) 2026 Antonio Cantallops
+Alba · contact@exyonq.org.
 - `setup` cannot install everything everywhere (Go absent for osv-scanner,
   typomania is library-only, cargo-udeps needs nightly): failures are recorded,
   never hidden — see `report/not-executed-<date>.md`.

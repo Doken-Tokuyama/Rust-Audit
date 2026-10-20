@@ -28,9 +28,9 @@ Then **restart Freebuff** — its orchestrator caches the skill registry at
 startup, and a running instance does not see new packages.
 
 The wrapper resolves the auditor from `$RUST_AUDIT_HOME` (export it if your
-clone lives somewhere other than `/Volumes/Lexar/Cursor/rust-ai-audit`) and
-picks a Python **3.11+** interpreter itself; a system `python3` of 3.9 is
-normal on macOS and is handled.
+clone lives somewhere other than the default the wrapper knows) and picks a
+Python **3.11+** interpreter itself; a system `python3` of 3.9 is normal on
+macOS and is handled.
 
 ## Verify
 

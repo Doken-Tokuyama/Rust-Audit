@@ -62,4 +62,5 @@ would have executed is recorded as *skipped* in the not-executed report.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). © 2026 Doken-Tokuyama.
+Apache License 2.0 — see [LICENSE](LICENSE).
+Copyright (c) 2026 Antonio Cantallops Alba · contact@exyonq.org
