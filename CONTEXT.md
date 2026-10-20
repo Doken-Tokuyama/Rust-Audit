@@ -111,6 +111,14 @@ The verification that must end `VERIFIED` on the staged assets before
 anything is uploaded — the only path to upload in `release.sh`.
 _Avoid_: CI check (the CI run re-verifies *after* publishing)
 
+**Release gate** (gate de release):
+One of the two outside facts `release.sh` waits for before calling a release
+done — a green suite on the tagged commit, and the simple index serving a
+wheel that carries the audited bytes ([docs/ci.md](docs/ci.md)). It differs
+from the pre-publish gate, which only judges bytes on this machine.
+_Avoid_: CI check (the CI run reports; the release gate blocks the tag and the
+`RELEASED` line until it passes)
+
 **Attested release** (release atestiguada):
 A release whose assets carry the SSH-signed SHA256SUMS chain (key pin ->
 signature -> checksum -> tag identity), pinned key in the repo —

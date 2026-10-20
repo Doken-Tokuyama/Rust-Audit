@@ -14,6 +14,13 @@
 #             SIGNING_KEY (its .pub must sit next to it), then run the same
 #             pre-publish gate and upload.
 #
+# 0. CI gate — scripts/release_checks.py ci: the suite must have ended green
+#    on the exact commit the tag points at (gh run list --commit <sha>). In
+#    --cut mode this runs before the tag is created, so a red suite leaves no
+#    tag and nothing signed. The workflow itself no longer runs on `v*` tags:
+#    a cut pushed one commit and tagged it, which ran the identical suite
+#    twice for one SHA (v0.2.6). This gate is the replacement, and it blocks
+#    instead of reporting.
 # 1. pre-publish gate — scripts/verify_release.sh --dir STAGEDIR TAG:
 #    key pin -> SSH signature -> checksum -> tag identity against the git
 #    tag, with the JSON receipt written under report/. Nothing is uploaded
@@ -23,13 +30,22 @@
 #    the gate's JSON receipt as evidence.
 # 3. post-publish chain — the full verification (incl. the receipt
 #    cross-check of the just-attached receipt) re-runs on the uploaded
-#    bytes; RELEASED is printed only when it ends on VERIFIED.
+#    bytes.
+# 4. PyPI gate — scripts/release_checks.py pypi: the simple index must serve
+#    rust_audit-<version>-py3-none-any.whl, with the digest the index records
+#    and a rust_audit.py identical to the signed one. The JSON API listing a
+#    version is not the same fact: pip resolves from the simple index and
+#    answered "No matching distribution found" for a minute after 0.2.6 was
+#    already listed there (2026-10-20).
+# RELEASED is printed only when 1, 3 and 4 all pass.
 #
-# Exit: 0 released · 1 the gate refused the staged assets, or the uploaded
-#       bytes failed the post-publish chain · 2 environment/usage error
+# Exit: 0 released · 1 the CI gate found no green suite on that commit, the
+#       pre-publish gate refused the staged assets, the uploaded bytes failed
+#       the post-publish chain, or PyPI does not serve the version ·
+#       2 environment/usage error
 # Needs: gh authenticated as an account with release access to the
-#        repository, plus what verify_release.sh needs for --dir
-#        (ssh-keygen, git, shasum/sha256sum).
+#        repository, python3 (both gates), plus what verify_release.sh needs
+#        for --dir (ssh-keygen, git, shasum/sha256sum).
 
 set -u
 
@@ -38,9 +54,27 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT="${RA_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 ASSETS="rust_audit.py SHA256SUMS SHA256SUMS.sig allowed_signers"
 SIGN_IDENTITY="release@rust-audit"
+CHECKS="${RA_RELEASE_CHECKS:-$SCRIPT_DIR/release_checks.py}"
+CI_TIMEOUT="${RA_CI_TIMEOUT:-1800}"     # the tests job's own timeout
+CI_POLL="${RA_CI_POLL:-15}"
+PYPI_TIMEOUT="${RA_PYPI_TIMEOUT:-600}"   # propagation took ~1 min for 0.2.6
+PYPI_POLL="${RA_PYPI_POLL:-10}"
 
 say() { printf '%s\n' "$*"; }
 die() { say "ERROR $*" >&2; exit 2; }
+
+# The suite must have passed on the exact commit a tag points at. Without the
+# `v*` trigger this is the only place that fact is checked, and it is checked
+# before anything is signed or uploaded — not after, from another run.
+ci_gate() {  # ci_gate REF -> 0 green, 1 not green, 2 cannot tell
+  local ref="$1" sha
+  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || die "not a git checkout: $REPO_ROOT (the CI gate needs the tag's commit)"
+  sha=$(git -C "$REPO_ROOT" rev-parse "$ref^{commit}" 2>/dev/null) \
+    || die "no such git ref: $ref (tag the release commit first)"
+  python3 "$CHECKS" ci --sha "$sha" --repo "$REPO" \
+    --timeout "$CI_TIMEOUT" --interval "$CI_POLL"
+}
 
 if command -v sha256sum >/dev/null 2>&1; then SHA256_MAKE="sha256sum"
 elif command -v shasum >/dev/null 2>&1; then SHA256_MAKE="shasum -a 256"
@@ -56,7 +90,7 @@ if [ "${1:-}" = "--cut" ]; then
     || die "TAG must look like v1.2.3: $TAG"
   [ -f "$KEY" ] || die "no such signing key: $KEY"
   [ -f "$KEY.pub" ] || die "missing $KEY.pub — ssh-keygen -Y sign needs the public half next to the private key"
-  for tool in git ssh-keygen; do
+  for tool in git ssh-keygen python3; do
     command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
   done
 
@@ -67,11 +101,22 @@ if [ "${1:-}" = "--cut" ]; then
   done
   git -C "$REPO_ROOT" commit -q -m "Cut $TAG: version bump and verify-before-use pins" \
     -- scripts/rust_audit.py README.md SKILL.md || die "nothing to commit for $TAG"
-  git -C "$REPO_ROOT" tag "$TAG" || die "cannot tag $TAG"
   if git -C "$REPO_ROOT" log origin/main..HEAD --format=%b 2>/dev/null | grep -qiE '^co-authored-by:'; then
     die "pre-push criterion failed: a commit carries a co-author trailer"
   fi
-  git -C "$REPO_ROOT" push -q origin HEAD "$TAG" || die "cannot push HEAD and $TAG"
+  # Main first, then the CI gate, and only then the tag: a red suite leaves no
+  # tag to yank and nothing signed, instead of a published tag nobody verified.
+  git -C "$REPO_ROOT" push -q origin HEAD || die "cannot push HEAD"
+  say "CI gate: the suite must end green on the cut commit before $TAG exists"
+  ci_rc=0
+  ci_gate HEAD || ci_rc=$?
+  if [ "$ci_rc" -ne 0 ]; then
+    say "NOT RELEASED  no green suite on the cut commit — no tag was created, nothing was signed or uploaded. main carries the bump: fix forward and re-run the cut." >&2
+    exit "$ci_rc"
+  fi
+  CI_GATE_DONE=1
+  git -C "$REPO_ROOT" tag "$TAG" || die "cannot tag $TAG"
+  git -C "$REPO_ROOT" push -q origin "$TAG" || die "cannot push $TAG"
 
   STAGED_DIR=$(mktemp -d) || die "cannot create a staging dir"
   cp "$REPO_ROOT/scripts/rust_audit.py" "$STAGED_DIR/"
@@ -86,10 +131,25 @@ else
   STAGED_DIR="$2"
   [ -d "$STAGED_DIR" ] || die "no such directory: $STAGED_DIR"
 fi
-command -v gh >/dev/null 2>&1 || die "missing required tool: gh"
+version="${TAG#v}"
+for tool in gh python3; do
+  command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
+done
 for f in $ASSETS; do
   [ -f "$STAGED_DIR/$f" ] || die "staged assets in $STAGED_DIR are missing $f"
 done
+
+# Pre-staged assets (release.sh TAG STAGEDIR) skip the --cut ordering, so the
+# CI gate runs here instead — against the tag, which must already exist.
+if [ "${CI_GATE_DONE:-0}" -ne 1 ]; then
+  say "CI gate on $TAG (the suite must have passed on the tagged commit)"
+  ci_rc=0
+  ci_gate "$TAG" || ci_rc=$?
+  if [ "$ci_rc" -ne 0 ]; then
+    say "NOT RELEASED  no green suite on $TAG's commit — nothing was uploaded." >&2
+    exit "$ci_rc"
+  fi
+fi
 
 say "Pre-publish gate on $STAGED_DIR (release $TAG)"
 gate_log=$(mktemp) || die "cannot create a temp file"
@@ -121,4 +181,14 @@ if ! bash "$SCRIPT_DIR/verify_release.sh" "$TAG"; then
   say "NOT VERIFIED  $TAG is uploaded but failed the post-publish chain — do not trust the assets." >&2
   exit 1
 fi
-say "RELEASED  $REPO $TAG — pre-publish gate passed, the receipt is attached, and the uploaded bytes passed the post-publish chain."
+
+say "PyPI gate: rust-audit $version must be installable, with the audited bytes"
+pypi_rc=0
+python3 "$CHECKS" pypi --version "$version" \
+  --module "$STAGED_DIR/rust_audit.py" \
+  --timeout "$PYPI_TIMEOUT" --interval "$PYPI_POLL" || pypi_rc=$?
+if [ "$pypi_rc" -ne 0 ]; then
+  say "UPLOADED, NOT SERVED  $REPO $TAG — the assets verified, but PyPI does not serve rust-audit $version yet. Do not tell anyone to install it: re-check with scripts/release_checks.py pypi --version $version --module <signed rust_audit.py>." >&2
+  exit "$pypi_rc"
+fi
+say "RELEASED  $REPO $TAG — the suite was green on the tagged commit, the pre-publish gate passed, the receipt is attached, the uploaded bytes passed the post-publish chain, and PyPI serves rust-audit $version with the audited rust_audit.py."

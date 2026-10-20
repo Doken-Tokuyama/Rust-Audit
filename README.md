@@ -63,10 +63,13 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 .venv/bin/python -m pytest tests/
 ```
 
-CI runs exactly that on every push to `main`, every `v*` release tag and every
-pull request (`.github/workflows/tests.yml`: Python 3.11 and 3.13, pytest as
-the only install), so a commit is verified without anyone remembering to type
-it. `tests/test_ci_workflows.py` keeps the job honest: it must exist, it must
+CI runs exactly that on every push to `main` and every pull request
+(`.github/workflows/tests.yml`: Python 3.11 and 3.13, pytest as the only
+install), so a commit is verified without anyone remembering to type it. Release
+tags are not a third trigger: a cut pushes one commit and tags it, which would
+run the identical suite twice on the same SHA — instead `scripts/release.sh`
+waits for the run on that commit before it tags, signs or uploads, and waits
+for PyPI to serve the version before it prints `RELEASED`. `tests/test_ci_workflows.py` keeps the job honest: it must exist, it must
 run this suite, it may not swallow a failure, and every action is pinned to
 one commit SHA across all workflows. A second job audits the **published
 artifact**: `python -m build`, install with `--no-index` into a clean venv,

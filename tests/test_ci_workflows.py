@@ -65,11 +65,30 @@ def test_every_action_is_pinned_to_a_commit():
                 f"{where} {ref} carries no readable version comment")
 
 
-def test_the_suite_also_runs_on_release_tags():
-    """A tag is what gets signed and published; the suite must cover it."""
-    text = SUITE.read_text(encoding="utf-8")
-    assert re.search(r'^\s+tags:\s*\["v\*"\]', text, re.M), (
-        "release tags do not run the suite: the signed bytes would be untested")
+def test_a_cut_commit_does_not_run_the_suite_twice():
+    """The released bytes must be tested — once, on the commit, not per ref.
+
+    `tags: ["v*"]` ran this suite twice on one SHA, because `release.sh --cut`
+    pushes a commit to `main` and tags the same commit (v0.2.6, 2026-10-20:
+    two green runs, identical bytes). The trigger is gone, so the guarantee
+    moved into the release: `scripts/release.sh` waits for the run on the cut
+    commit (`scripts/release_checks.py ci`) *before* it creates the tag, signs
+    or uploads. That is stricter than a second run — a red suite now blocks the
+    release — so both halves are pinned here: no tag trigger, and the gate
+    still in front of the tag and of the RELEASED line.
+    """
+    text = behaviour(SUITE)
+    assert not re.search(r"^\s+tags:", text, re.M), (
+        "tests.yml triggers on tags again: one cut commit would run the suite "
+        "twice, once per ref, for the same bytes")
+    release = (REPO / "scripts" / "release.sh").read_text(encoding="utf-8")
+    assert "release_checks.py" in release, (
+        "the tag trigger is gone and nothing checks CI on the cut commit")
+    assert release.index("ci_gate HEAD") < release.index('tag "$TAG"'), (
+        "the CI gate must run before the tag exists, or a red suite leaves a "
+        "published tag behind")
+    assert release.index('pypi --version') < release.index("RELEASED  $REPO"), (
+        "RELEASED is printed before PyPI is known to serve the version")
 
 
 def test_each_action_is_pinned_to_one_commit_everywhere():

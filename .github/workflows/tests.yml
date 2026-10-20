@@ -24,9 +24,15 @@ name: tests
 on:
   push:
     branches: [main]
-    # A release tag is the thing that gets signed and published: the suite must
-    # have run on those exact bytes, not only on the branch they came from.
-    tags: ["v*"]
+    # Deliberately NOT `tags: ["v*"]`. A cut pushes one commit to main and
+    # tags that same commit, so the tag ran this suite a second time on the
+    # identical SHA (v0.2.6, 2026-10-20: two runs, same bytes, double cost).
+    # The guarantee those tag runs were meant to give — the released bytes
+    # were tested — now lives in `scripts/release.sh`: it waits for the run on
+    # the cut commit (`scripts/release_checks.py ci`) before it creates the
+    # tag, signs, or uploads, so a red suite blocks the release instead of
+    # producing another green run somewhere else. publish/attest/verify still
+    # run on `release: published`, which is a different event.
   pull_request:
   workflow_dispatch:
 

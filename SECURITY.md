@@ -122,20 +122,34 @@ scripts/release.sh --cut v0.2.2 <signing-key>
 ```
 
 It bumps `VERSION`, moves the verify-before-use pins in README.md and
-SKILL.md to the new tag, commits, tags and pushes (refusing any commit that
-carries a co-author trailer), stages the four attestation assets (manifest
-+ SSH signature with `<signing-key>` — its `.pub` must sit next to it), and
-then runs the **pre-publish gate**: `verify_release.sh --dir` must end on
+SKILL.md to the new tag, commits and pushes to `main` (refusing any commit
+that carries a co-author trailer), then waits for the **CI gate**: the suite
+must have ended green on that exact commit (`gh run list --commit <full sha>`,
+via `scripts/release_checks.py ci`). Only then is the tag created and pushed,
+so a red suite leaves no tag to yank and nothing signed. It then stages the
+four attestation assets (manifest + SSH signature with `<signing-key>` — its
+`.pub` must sit next to it), and runs the **pre-publish gate**: `verify_release.sh --dir` must end on
 `VERIFIED` (exit 0) — key pin -> signature -> checksum -> tag identity
 against the git tag (the release is not published yet) — before anything is
 uploaded (`gh release create --verify-tag`, or `gh release upload` when the
 release already exists). The gate's JSON receipt is attached to the release
 as evidence (and stays under `report/`); then `release.sh` itself re-runs
 the chain on the uploaded bytes — including the cross-check of the
-just-attached receipt — and prints `RELEASED` only on `VERIFIED` (an upload
-that fails it is reported as uploaded-but-not-trusted). The post-release CI
-workflow re-runs the same chain once more and keeps its receipt with the
-run. `release.sh TAG STAGEDIR` serves pre-staged assets: same gate,
+just-attached receipt — (an upload that fails it is reported as
+uploaded-but-not-trusted). The post-release CI workflow re-runs the same
+chain once more and keeps its receipt with the run.
+
+Finally the **PyPI gate** (`scripts/release_checks.py pypi`): the simple index
+must serve `rust_audit-<version>-py3-none-any.whl`, the file must match the
+digest that index records for it, and the `rust_audit.py` inside must be
+byte-identical to the signed one. Only then is `RELEASED` printed. That last
+wait exists because the JSON API and pip disagree for about a minute after an
+upload: `https://pypi.org/pypi/rust-audit/0.2.6/json` answered 200 while
+`pip install rust-audit==0.2.6` still said "No matching distribution found"
+(2026-10-20). A version the index does not serve by the deadline
+(`RA_PYPI_TIMEOUT`, default 600 s) is reported as `UPLOADED, NOT SERVED` with
+exit 1 — assets verified, installation not yet possible. `release.sh TAG
+STAGEDIR` serves pre-staged assets: same gates (CI against the existing tag),
 same upload rule.
 
 The same chain by hand — the repository is public, so the downloads need no

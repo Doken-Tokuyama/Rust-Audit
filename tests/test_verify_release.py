@@ -115,6 +115,19 @@ def release(tmp_path):
     stub.write_text(GH_STUB)
     stub.chmod(0o755)
 
+    # The CI and PyPI gates (scripts/release_checks.py) talk to GitHub and to
+    # the index: here they are a stub that records the call and can refuse.
+    # The real script has its own tests, including a live PyPI call.
+    checks = tmp_path / "checks.py"
+    checks.write_text(
+        "import os, sys\n"
+        "with open(os.environ['RA_CHECKS_LOG'], 'a') as fh:\n"
+        "    fh.write('checks ' + ' '.join(sys.argv[1:]) + chr(10))\n"
+        "if os.environ.get('RA_CHECKS_FAIL') in sys.argv[1:]:\n"
+        "    print('FAIL  ' + sys.argv[1] + ': stub refusal', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "print('PASS  ' + sys.argv[1] + ': stub')\n")
+
     fp = cmd("ssh-keygen", "-lf", f"{key}.pub").stdout.split()[1]
 
     def verify(*args, **env):
@@ -124,7 +137,9 @@ def release(tmp_path):
     verify.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}",
                   "RA_FIXTURES": str(fx), "RA_EXPECT_FINGERPRINT": fp,
                   "RA_RECEIPT_DIR": str(tmp_path / "report"),
-                  "RA_REPO_ROOT": str(tmp_path / "tagrepo")}
+                  "RA_REPO_ROOT": str(tmp_path / "tagrepo"),
+                  "RA_RELEASE_CHECKS": str(checks),
+                  "RA_CHECKS_LOG": str(tmp_path / "checks.log")}
 
     return fx, verify, make_tarball
 
@@ -443,6 +458,11 @@ def run_release(verify, *args, **env):
     return cmd("bash", RELEASE, *args, env={**verify.env, **env})
 
 
+def checks_log(tmp_path):
+    path = tmp_path / "checks.log"
+    return path.read_text() if path.exists() else ""
+
+
 def test_release_uploads_only_after_the_gate_verifies(release, tmp_path):
     fx, verify, _ = release
     r = run_release(verify, "v0.0.0-test", str(fx))
@@ -480,6 +500,42 @@ def test_release_requires_every_staged_asset(release):
     assert r.returncode == 2
     assert "are missing allowed_signers" in r.stderr
     assert not (fx / "gh-calls.log").exists()
+
+
+def test_release_waits_for_ci_and_pypi_before_declaring_released(release, tmp_path):
+    """Order: CI green -> gate -> upload -> assets re-verified -> PyPI -> RELEASED."""
+    fx, verify, _ = release
+    r = run_release(verify, "v0.0.0-test", str(fx))
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = checks_log(tmp_path)
+    assert "checks ci" in log, log
+    assert "checks pypi --version 0.0.0-test --module" in log, log
+    out = r.stdout
+    assert (out.index("CI gate")
+            < out.index("Pre-publish gate")
+            < out.index("Post-publish chain")
+            < out.index("PyPI gate")
+            < out.index("RELEASED  Doken-Tokuyama")), out
+    assert "PyPI serves rust-audit 0.0.0-test" in out
+
+
+def test_a_red_suite_blocks_the_release_before_anything_is_uploaded(release, tmp_path):
+    fx, verify, _ = release
+    r = run_release(verify, "v0.0.0-test", str(fx), RA_CHECKS_FAIL="ci")
+    assert r.returncode == 1
+    assert "NOT RELEASED" in r.stderr
+    assert "no green suite on v0.0.0-test's commit" in r.stderr
+    assert not (fx / "gh-calls.log").exists()   # uh was never reached
+    assert "Pre-publish gate" not in r.stdout    # and nothing was signed
+
+
+def test_a_version_pypi_does_not_serve_withholds_the_release_message(release, tmp_path):
+    fx, verify, _ = release
+    r = run_release(verify, "v0.0.0-test", str(fx), RA_CHECKS_FAIL="pypi")
+    assert r.returncode == 1
+    assert "UPLOADED, NOT SERVED" in r.stderr
+    assert "RELEASED  Doken-Tokuyama" not in r.stdout
+    assert "release create v0.0.0-test" in (fx / "gh-calls.log").read_text()
 
 
 def test_release_cross_checks_the_attached_receipt_before_declaring(release):
@@ -550,6 +606,25 @@ def test_cut_releases_in_one_command(release, tmp_path):
                 if "release upload v9.9.9" in line and "verify-release-" in line]
     assert attached, f"the receipt was not uploaded: {calls}"
     assert receipts(tmp_path / "report")   # and kept under report/
+    log = checks_log(tmp_path)
+    assert "checks ci --sha" in log, log          # the suite was green first
+    assert "checks pypi --version 9.9.9" in log, log
+    assert r.stdout.index("CI gate") < r.stdout.index("RELEASED")
+
+
+def test_cut_creates_the_tag_only_after_a_green_suite(release, tmp_path):
+    """Red CI: the bump reaches main, but no tag, no signature, no upload."""
+    fx, verify, _ = release
+    repo, origin = cut_setup(tmp_path)
+    r = run_release(verify, "--cut", "v9.9.9", str(tmp_path / "key"),
+                    RA_REPO_ROOT=str(repo), RA_CHECKS_FAIL="ci")
+    assert r.returncode == 1
+    assert "NOT RELEASED" in r.stderr
+    assert "no green suite" in r.stderr
+    assert 'VERSION = "9.9.9"' in (repo / "scripts" / "rust_audit.py").read_text()
+    assert cmd("git", "-C", origin, "rev-parse", "v9.9.9").returncode != 0
+    assert not (fx / "gh-calls.log").exists()
+    assert "checks ci" in checks_log(tmp_path)
 
 
 def test_cut_gate_failure_blocks_the_upload(release, tmp_path):

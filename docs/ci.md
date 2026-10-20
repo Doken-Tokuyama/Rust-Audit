@@ -1,10 +1,16 @@
 # CI — what runs, what it proves, and what it does not
 
 `.github/workflows/tests.yml` runs the suite on every push to `main`, on every
-pull request, on every `v*` release tag and on demand. Two Python versions
-(`3.11`, the floor `requires-python` declares, and `3.13`, the newest the
-classifiers claim), `pytest` as the only install, then `pytest -q tests/` and a
-`selftest` step. Nothing else: the auditor is one stdlib-only module, so a
+pull request and on demand. It deliberately does **not** trigger on `v*` tags:
+`scripts/release.sh --cut` pushes one commit to `main` and tags that same
+commit, so the tag ran the identical suite a second time on one SHA (v0.2.6,
+2026-10-20 — two green runs, same bytes, double cost). The guarantee those runs
+existed for now lives in the release: it waits for the run on the cut commit
+before creating the tag, signing or uploading, and a red suite stops it there
+(see [The release waits for the outside world](#the-release-waits-for-the-outside-world)).
+Two Python versions (`3.11`, the floor `requires-python` declares, and `3.13`,
+the newest the classifiers claim), `pytest` as the only install, then
+`pytest -q tests/` and a `selftest` step. Nothing else: the auditor is one stdlib-only module, so a
 green job means *this commit's code* works, not that a dependency resolved.
 
 A second job, `wheel`, runs after the suite and audits the published artifact
@@ -79,6 +85,31 @@ the same commit, and `needs: pytest` is what keeps that inference true.
 Still not proven by it: the **sdist** (the install resolves the wheel), and
 Windows/macOS.
 
+## The release waits for the outside world
+
+`scripts/release.sh` does not end on its own report any more. Two external
+facts must arrive first, both from `scripts/release_checks.py` (tested in
+`tests/test_release_checks.py`, including one live call against PyPI):
+
+| Gate | When it runs | Passes only when | On failure |
+|---|---|---|---|
+| `ci` | before the tag exists (`--cut`), or before the upload when assets were pre-staged | a completed `success` run of `tests.yml` exists for the tag's full 40-hex commit (`gh run list --commit <sha>`) | exit 1: no tag is created, nothing is signed or uploaded |
+| `pypi` | after the post-publish chain, before `RELEASED` | `https://pypi.org/simple/rust-audit/` lists `rust_audit-<version>-py3-none-any.whl`, the file matches the digest the index records, and its `rust_audit.py` is byte-identical to the signed one | exit 1, `UPLOADED, NOT SERVED`: the assets verified but nobody should be told to install it yet |
+
+The **simple index**, not the JSON API, is what pip resolves from: on
+2026-10-20 `pip install rust-audit==0.2.6` answered “No matching distribution
+found” while `https://pypi.org/pypi/rust-audit/0.2.6/json` already returned 200.
+Checking the JSON API would have declared that release finished a minute early.
+Both gates poll to a deadline (`RA_CI_TIMEOUT`, default 1800 s; `RA_PYPI_TIMEOUT`,
+default 600 s) and print what they observed when the deadline passes, instead of
+assuming the workflow or the CDN did their part.
+
+What the `ci` gate cannot tell you: it reads GitHub's answer for one full SHA,
+so a run **cancelled by `concurrency`** (someone pushed while the cut was
+waiting) counts as a failure and the cut must be re-run, and renaming
+`tests.yml` makes the gate time out rather than pass. Both are loud, neither is
+silent — which is the point of asking instead of assuming.
+
 ## What it does not prove
 
 - **Not Windows or macOS.** `ubuntu-latest` only. The suite has no
@@ -98,6 +129,12 @@ and this repository's release flow is a direct `git push origin HEAD`
 leaving `enforce_admins` off means the maintainer can push past a red check.
 The job therefore reports, and the honest statement is: *the check is
 advisory for the maintainer's direct pushes, mandatory for contributions*.
+
+One path is no longer advisory: **cutting a release**. `scripts/release.sh`
+waits for the run on the cut commit and refuses to create the tag when it is
+not green, so a red suite cannot be published even though it cannot stop the
+push that triggered it. Blocking the push and blocking the release are
+different questions, and only the second one is answered here.
 
 If a hard gate is ever wanted, the change is architectural, not cosmetic:
 move the release to a PR (cut a branch, let CI run, merge, tag on the merge
