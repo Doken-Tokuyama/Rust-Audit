@@ -16,7 +16,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 TOOL = REPO / "scripts" / "rust_audit.py"
 PYPROJECT = REPO / "pyproject.toml"
-ALIAS = REPO / "packaging" / "rustaudit-alias" / "pyproject.toml"
+PUBLISH_WORKFLOW = REPO / ".github" / "workflows" / "publish.yml"
 
 
 def load_module(path=TOOL, name="rust_audit_probe"):
@@ -54,16 +54,22 @@ def test_both_commands_run_the_same_entry_point():
         "the entry point names a function the module does not define")
 
 
-def test_alias_reserves_the_one_word_name():
-    alias = tomllib.loads(ALIAS.read_text())
-    version = tool_version()
-    assert alias["project"]["name"] == "rustaudit"
-    assert alias["project"]["version"] == version
-    assert alias["project"]["dependencies"] == [f"rust-audit>={version}"]
-    assert alias["tool"]["setuptools"]["packages"] == []
-    assert "scripts" not in alias["project"], (
-        "the alias must install no commands of its own, or it could shadow the "
-        "real package's entry points")
+def test_only_one_distribution_is_published():
+    """`rustaudit` cannot be a PyPI project next to `rust-audit`.
+
+    PyPI answers a pending publisher for the one-word name with "This project
+    name is too similar to an existing project" (checked against the live API
+    on 2026-10-20), so a second distribution would fail on every release. The
+    one-word command ships from this wheel's own entry points instead; the
+    workflow must not build or upload a second project.
+    """
+    workflow = PUBLISH_WORKFLOW.read_text()
+    assert "python -m build --outdir dist/main" in workflow
+    assert "packaging/" not in workflow, (
+        "the workflow builds a second distribution, which PyPI refuses as "
+        "too similar to rust-audit")
+    assert not (REPO / "packaging").exists(), (
+        "an alias distribution reappeared under packaging/")
 
 
 def test_declared_data_files_exist():

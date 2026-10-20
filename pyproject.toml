@@ -42,9 +42,9 @@ dev = ["pytest>=7.4.0"]
 
 [project.scripts]
 rust-audit = "rust_audit:main"
-# Same entry point under the one-word spelling; the `rustaudit` distribution on
-# PyPI is an alias that pulls this one in, so either name on the prompt runs
-# the same code once this package is installed.
+# Same entry point under the one-word spelling. There is no `rustaudit`
+# distribution on PyPI: it is refused as "too similar to an existing project"
+# next to `rust-audit`, so this wheel is the only place that name comes from.
 rustaudit = "rust_audit:main"
 
 [project.urls]

@@ -161,9 +161,12 @@ asset format, only what a verifier can additionally check.
 
 ## PyPI channel (v0.2.2+) — what a wheel does and does not prove
 
-The tool is also published as `rust-audit` (alias: `rustaudit`) with **trusted
-publishing** — GitHub's OIDC identity replaces an API token, so no upload
-secret exists in this repository. The wheel ships `scripts/rust_audit.py`
+The tool is also published as `rust-audit` with **trusted publishing** —
+GitHub's OIDC identity replaces an API token, so no upload secret exists in
+this repository. One distribution serves both commands (`rust-audit` and
+`rustaudit`): PyPI refuses a separate one-word project as too similar to this
+name, so there is no alias package to reason about. The wheel ships
+`scripts/rust_audit.py`
 byte for byte (the same file the signed GitHub asset carries) plus the curated
 data under `share/rustaudit/`; `rust-audit selftest` runs the same rules.
 

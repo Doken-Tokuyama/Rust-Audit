@@ -14,9 +14,11 @@ pipx install rust-audit      # or: pip install rust-audit
 rust-audit selftest          # prints `selftest PASS`
 ```
 
-From PyPI as **`rust-audit`**; the one-word alias **`rustaudit`** is the same
-package under a name that resolves to it, and both `rust-audit` and `rustaudit`
-run from either install. Nothing is fetched or executed at install time, and
+From PyPI as **`rust-audit`**, whose wheel installs both commands: `rust-audit`
+and `rustaudit` run the same module. There is no separate one-word project on
+PyPI — it answers "This project name is too similar to an existing project" —
+so the spelling is served by this package's own entry point.
+Nothing is fetched or executed at install time, and
 the wheel carries the same `rust_audit.py` as the signed release asset — so the
 verify-before-use chain below still applies to the script you download.
 

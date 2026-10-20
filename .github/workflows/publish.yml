@@ -1,11 +1,15 @@
-# Publish to PyPI when a release is published: `rust-audit` (the real
-# package, one stdlib module plus its data) and `rustaudit` (a metadata-only
-# alias that depends on it, so both spellings of the name resolve).
+# Publish to PyPI when a release is published: `rust-audit`, one stdlib module
+# plus its data, installing both commands (`rust-audit` and `rustaudit`).
+#
+# There is deliberately no second distribution for the one-word spelling:
+# PyPI refuses `rustaudit` next to `rust-audit` with "This project name is too
+# similar to an existing project", so an alias package can never exist there.
+# The `rustaudit` command comes from this wheel's own entry point instead.
 #
 # Trusted publishing (OIDC): the `id-token: write` permission replaces an API
 # token. Nothing secret lives in this repository and nothing needs rotating.
 #
-# One-time setup on PyPI — a pending publisher for EACH project, same claims:
+# One-time setup on PyPI — a pending publisher for the project, same claims:
 #   https://pypi.org/manage/account/publishing/
 #     owner:       Doken-Tokuyama
 #     repository:  Rust-Audit
@@ -60,7 +64,6 @@ jobs:
         run: |
           python -m pip install --upgrade build
           python -m build --outdir dist/main
-          python -m build packaging/rustaudit-alias --outdir dist/alias
       - name: The wheel must contain the tool and its data
         run: |
           python - <<'PY'
@@ -77,12 +80,12 @@ jobs:
           print("\n".join(names))
           sys.exit(f"wheel is missing: {missing}" if missing else 0)
           PY
-      - name: Both names install and the command self-tests
+      - name: The wheel installs and both commands self-test
         run: |
           python -m venv /tmp/check
           /tmp/check/bin/pip install --no-index \
-            --find-links dist/main --find-links dist/alias rustaudit
-          /tmp/check/bin/pip show rust-audit rustaudit | grep -E '^(Name|Version):'
+            --find-links dist/main rust-audit
+          /tmp/check/bin/pip show rust-audit | grep -E '^(Name|Version):'
           /tmp/check/bin/rust-audit selftest
           /tmp/check/bin/rustaudit selftest
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -106,7 +109,3 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist/main
-      - name: Publish the rustaudit alias
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
-        with:
-          packages-dir: dist/alias
