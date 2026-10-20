@@ -1,15 +1,23 @@
-"""Pin the skill wrapper to the tool's real CLI.
+"""Pin the skill wrapper to the tool's real CLI and to every live copy.
 
 Every flag the wrapper documents must exist in `rust_audit.py`'s live `--help`
 surface, and the wrapper's one universal claim ("--no-exec, accepted by every
 subcommand") must hold per subcommand. When argparse moves and the wrapper
 does not, installs break silently — this fails instead. The installed copy is
 checked too when present on the machine.
+
+The served instructions are guarded by scripts/check_skill_sync.py (run here
+through its public --json interface): the repo copy, the machine-global
+install and the live Freebuff account snapshot must all carry the same
+instructions, allowing only the trailing newline the sync strips.
 """
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 TOOL = REPO / "scripts" / "rust_audit.py"
@@ -65,73 +73,55 @@ def test_no_exec_claim_holds_for_every_subcommand():
         f"wrapper says --no-exec is accepted by every subcommand; missing on: {missing}")
 
 
-# Byte identity across every LIVE copy of each skill wrapper: the repo
-# (canonical), the machine-global install and the newest Freebuff account
-# (Cloud-synced) snapshot per account. One drifted byte — including the
-# trailing newline a sync once stripped — must fail here instead of
-# silently serving stale instructions. Older snapshot dirs are rollback
-# archives of previous syncs and are not served, so they are not compared.
+# Every LIVE copy of a skill must serve this repository's instructions: the
+# machine-global install and the Freebuff account snapshot named sha256(
+# current.json) (older snapshots are rollback archives, not served).
+#
+# The drift rule has ONE implementation, scripts/check_skill_sync.py, with
+# fixtures (including the negative, stale-copy case) in
+# tests/test_check_skill_sync.py. It allows exactly one byte class: the
+# trailing newline the sync strips when it embeds and when it materializes a
+# copy (observed 2026-10-19 and again 2026-10-20 00:55; see
+# docs/freebuff-account-skills-sync.md). A second definition here used to call
+# that normalization drift — a provably false positive, since the served
+# instructions were identical (docs/adr/0001).
 
 SKILLS = ("rust-audit", "rust-audit-family")
 ACCOUNT_SKILLS = Path.home() / ".config" / "freebuff-desktop" / "account-skills"
+INSTALL_DIR = Path.home() / ".agents" / "skills"
+CHECK_SYNC = REPO / "scripts" / "check_skill_sync.py"
 
 
-def skill_copies():
-    for name in SKILLS:
-        canonical = REPO / "skills" / name / "SKILL.md"
-        others = [Path.home() / ".agents" / "skills" / name / "SKILL.md"]
-        if ACCOUNT_SKILLS.exists():
-            newest = {}   # account dir -> (snapshot mtime, SKILL.md path)
-            for m in sorted(ACCOUNT_SKILLS.glob(f"**/{name}/SKILL.md")):
-                account, snapshot = m.parent.parent.parent, m.parent.parent
-                mtime = snapshot.stat().st_mtime
-                if account not in newest or mtime > newest[account][0]:
-                    newest[account] = (mtime, m)
-            others += [m for _, m in newest.values()]
-        yield name, canonical, [p for p in others if p.exists()]
-
-
-def test_skill_copies_are_byte_identical():
-    for name, canonical, others in skill_copies():
-        expected = canonical.read_bytes()
-        for copy in others:
-            assert copy.read_bytes() == expected, (
-                f"{copy} drifted from {canonical} — skill copies must be "
-                f"byte-identical (including the trailing newline); restore "
-                f"it from skills/{name}/")
-
-
-def account_registry():
-    """The live Freebuff registry (current.json) next to the snapshots."""
+def sync_model():
+    """(exit code, model) from the diagnostic's public --json interface."""
     if not ACCOUNT_SKILLS.exists():
-        return None
-    for current in sorted(ACCOUNT_SKILLS.glob("**/current.json")):
-        return current
-    return None
+        pytest.skip("no Freebuff account registry on this machine")
+    result = subprocess.run([sys.executable, str(CHECK_SYNC), "--json"],
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode in (0, 1), (
+        f"check_skill_sync.py execution error (exit {result.returncode}): "
+        f"{result.stderr}")
+    return result.returncode, json.loads(result.stdout)
 
 
-def test_registry_instructions_match_the_skill_files():
-    """The sync embeds SKILL.md into current.json, stripping (currently) one
-    trailing newline (docs/freebuff-account-skills-sync.md). The embed must
-    equal the file with or without that newline — zero difference is not
-    drift — and any other difference (stale content riding an old revision)
-    is."""
-    import json
-
-    current = account_registry()
-    if current is None:
-        return   # no Freebuff on this machine
-    registry = json.loads(current.read_text())
-    entries = {s["name"]: s for s in registry["settings"]["skills"]}
-    for name, canonical, _ in skill_copies():
-        if name not in entries:
-            continue   # not an account skill here
-        expected = canonical.read_bytes()
-        allowed = {expected}
-        if expected.endswith(b"\n"):
-            allowed.add(expected[:-1])   # the newline the sync strips
-        embedded = entries[name]["instructions"].encode()
-        assert embedded in allowed, (
-            f"{current} embeds drifted instructions for {name} — the only "
-            f"allowed difference is the stripped trailing newline; see "
-            f"docs/freebuff-account-skills-sync.md")
+def test_live_copies_serve_the_repo_instructions():
+    code, model = sync_model()
+    assert not model["findings"], (
+        "a live skill copy does not serve skills/<name>/SKILL.md (only the "
+        "sync-stripped trailing newline is allowed; see "
+        "docs/freebuff-account-skills-sync.md):\n"
+        + "\n".join(f"  {f['kind']} {f.get('skill', '')}: {f['detail']}"
+                    for f in model["findings"]))
+    assert code == 0, model["verdict"]
+    # Non-vacuous: the wrappers were actually compared with the live surfaces.
+    rows = [row for acc in model["accounts"] for row in acc["skills"]]
+    for name in SKILLS:
+        live = [r for r in rows
+                if r["name"] == name and r.get("live_vs_repo", {}).get(
+                    "state") in ("identical", "newline-only")]
+        assert live, f"{name} was never compared with the live snapshot: " \
+                     f"{[r for r in rows if r['name'] == name]}"
+    if INSTALL_DIR.is_dir():
+        compared = {row["name"] for row in model["install"]}
+        missing = sorted(set(SKILLS) - compared)
+        assert not missing, f"{missing} not compared in {INSTALL_DIR}"

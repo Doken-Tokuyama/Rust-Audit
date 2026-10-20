@@ -63,6 +63,11 @@ If that prints names, remove those names from the JSON list (the account
 snapshot does not actually contain the skills), restart Freebuff, and verify
 again.
 
+For the whole sync state at once — registry revision, live snapshot, embed
+against served copies, the `imported.json` trail — run
+`python3 scripts/check_skill_sync.py` and read its verdict
+([docs/freebuff-account-skills-sync.md](freebuff-account-skills-sync.md)).
+
 ## Uninstall
 
 ```bash
