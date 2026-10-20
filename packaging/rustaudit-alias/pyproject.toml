@@ -12,13 +12,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rustaudit"
-version = "0.2.2"
+version = "0.2.3"
 description = "Alias for rust-audit: installs the Rust Audit CLI under the one-word name"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [{ name = "Antonio Cantallops Alba", email = "contact@exyonq.org" }]
-dependencies = ["rust-audit>=0.2.2"]
+dependencies = ["rust-audit>=0.2.3"]
 
 [project.urls]
 Homepage = "https://github.com/Doken-Tokuyama/Rust-Audit"

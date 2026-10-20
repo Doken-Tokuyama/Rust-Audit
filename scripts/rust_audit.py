@@ -48,7 +48,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 TOOL_NAME = "Rust Audit"
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
