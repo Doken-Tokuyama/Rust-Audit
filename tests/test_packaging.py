@@ -17,6 +17,9 @@ REPO = Path(__file__).resolve().parent.parent
 TOOL = REPO / "scripts" / "rust_audit.py"
 PYPROJECT = REPO / "pyproject.toml"
 PUBLISH_WORKFLOW = REPO / ".github" / "workflows" / "publish.yml"
+ATTEST_WORKFLOW = REPO / ".github" / "workflows" / "attest-release.yml"
+# actions/attest-build-provenance v4.2.2, pinned by commit: a tag can move.
+ATTEST_SHA = "4d101475d8b20a2381f78447822ac1eab6504dd8"
 
 
 def load_module(path=TOOL, name="rust_audit_probe"):
@@ -70,6 +73,47 @@ def test_only_one_distribution_is_published():
         "too similar to rust-audit")
     assert not (REPO / "packaging").exists(), (
         "an alias distribution reappeared under packaging/")
+
+
+def test_provenance_attestations_are_wired_in():
+    """Both channels attest a digest, from the workflow that can sign it.
+
+    `gh attestation verify` only answers for a digest some workflow run
+    signed with the repository's OIDC identity, so deleting either step
+    would silently downgrade the channel to "trust the uploader".
+    """
+    publish = PUBLISH_WORKFLOW.read_text()
+    attest = ATTEST_WORKFLOW.read_text()
+    for name, workflow in (("publish.yml", publish),
+                           ("attest-release.yml", attest)):
+        assert "id-token: write" in workflow, f"{name}: nothing to sign with"
+        assert "attestations: write" in workflow, (
+            f"{name}: the attestation would have nowhere to go")
+        assert ATTEST_SHA in workflow, (
+            f"{name}: actions/attest-build-provenance is not pinned to "
+            f"{ATTEST_SHA} — a moving tag can be retargeted")
+    assert "subject-path: dist/main/*" in publish, (
+        "the wheel and sdist are not attested where they are built")
+    assert "subject-path: assets/*" in attest, (
+        "the uploaded release assets are not attested")
+    assert "release:" in attest and "published" in attest, (
+        "release assets only exist after `release: published`")
+    assert "gh release download" in attest, (
+        "the job must attest the bytes that were actually uploaded")
+
+
+def test_security_says_what_each_channel_proves():
+    security = (REPO / "SECURITY.md").read_text()
+    assert "gh attestation verify" in security, (
+        "the attestations exist but SECURITY.md never tells anyone how to "
+        "check them")
+    assert "not wired in yet" not in security, (
+        "SECURITY.md still says attestations are missing")
+    rows = [line for line in security.splitlines()
+            if line.startswith("| GitHub release asset |")
+            or line.startswith("| PyPI wheel")]
+    assert len(rows) == 2, (
+        "the channel table must cover the release asset and the wheel")
 
 
 def test_declared_data_files_exist():

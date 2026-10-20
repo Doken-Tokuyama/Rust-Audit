@@ -107,7 +107,10 @@ releases predating receipts stay verifiable. See
 
 CI runs the same chain automatically after every published release
 (`.github/workflows/verify-release.yml`) and fails the job on any mismatch;
-the same job can be dispatched by hand for any tag.
+the same job can be dispatched by hand for any tag. A second workflow
+(`.github/workflows/attest-release.yml`) attests the uploaded digests, so
+the SSH chain and the build-provenance attestation are checked separately
+and neither is inferred from the other.
 
 ### Cutting a release — the pre-publish gate
 
@@ -152,12 +155,29 @@ The verify step must print `Good "file" signature`; the checksum step must
 show `rust_audit.py: OK`.
 
 **Scope (honest):** the signature proves *integrity and key identity* —
-the bytes are exactly what the holder of this key published. It is **not
-CI provenance**: GitHub's native artifact attestations
-(`actions/attest`) are **not wired in yet**. They required a public
-repository (or a private one on Enterprise Cloud), which is the case since
-the repository went public on 2026-10-20; adding them would not change the
-asset format, only what a verifier can additionally check.
+the bytes are exactly what the holder of this key published. It says nothing
+about *how* they were built. GitHub's native artifact attestations
+(`actions/attest-build-provenance`, Sigstore) close part of that gap and are
+wired in since v0.2.5 — possible because the repository is public since
+2026-10-20:
+
+- **wheel and sdist** are attested in the publishing workflow, in the same job
+  that builds them:
+  `gh attestation verify rust_audit-<version>-py3-none-any.whl -R Doken-Tokuyama/Rust-Audit`
+- **release assets** are attested by `attest-release.yml` on
+  `release: published`, which downloads what was uploaded and attests each
+  file's digest:
+  `gh attestation verify rust_audit.py -R Doken-Tokuyama/Rust-Audit`
+
+What an attestation proves: that digest was signed by a run of a workflow in
+this repository, with the repository, workflow file, ref and commit recorded
+in the signed statement, and no signing secret involved. What it does **not**
+prove: that the run's inputs were clean. For the release assets it is weaker
+still — `release.sh` uploads them from a maintainer's machine, so the
+attestation covers *the bytes that ended up in the release*, not their
+production. There the SSH signature stays the only evidence of authorship;
+the attestation adds a timestamped CI record that the digest has not changed
+since the release was published.
 
 ## PyPI channel (v0.2.2+) — what a wheel does and does not prove
 
@@ -174,8 +194,8 @@ What each channel proves — they are **not** interchangeable:
 
 | Channel | Proves | Does not prove |
 |---|---|---|
-| GitHub release asset | *those exact bytes* were published by the holder of the pinned key (SSH signature, checksum, tag identity, receipt) | that the build machine was clean |
-| PyPI wheel/sdist | *built from this repository at this tag*, by the repository's own workflow (OIDC identity, recorded hashes) | anything about the bytes beyond what the build did |
+| GitHub release asset | *those exact bytes* were published by the holder of the pinned key (SSH signature, checksum, tag identity, receipt), and `attest-release.yml` attested their digests from CI | how the maintainer produced them, or that their machine was clean |
+| PyPI wheel/sdist | *built from this repository at this tag* by its own workflow (OIDC identity, recorded hashes), with the digest attested by that same run (`gh attestation verify`) | that the build inputs or the dependencies were clean |
 
 So: verify a downloaded `rust_audit.py` with the chain above; install from PyPI
 when you want the command on your `PATH`. `pip install --require-hashes` with

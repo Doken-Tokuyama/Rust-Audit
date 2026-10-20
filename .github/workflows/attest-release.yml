@@ -1,0 +1,59 @@
+# Attest the signed release assets.
+#
+# `release.sh` uploads `rust_audit.py`, `SHA256SUMS`, `SHA256SUMS.sig`,
+# `allowed_signers` and the gate receipt from a maintainer's machine, so no
+# workflow was involved in creating them. Only a workflow run can sign with
+# the repository's OIDC identity, so this job runs on `release: published`,
+# downloads what was uploaded, and attests each file's digest.
+#
+# What that buys: the digest of every asset is bound to a timestamped run of
+# this repository, which `gh attestation verify` checks:
+#   gh attestation verify rust_audit.py --repo Doken-Tokuyama/Rust-Audit
+# It does NOT prove how the maintainer produced those bytes — that is the SSH
+# signature's job (see SECURITY.md). The wheel and sdist are attested where
+# they are built, in publish.yml.
+name: attest-release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag whose uploaded assets to attest (e.g. v0.2.5)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  attest:
+    name: attest release assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # gh release download
+      id-token: write      # the OIDC identity that signs the attestation
+      attestations: write  # where the attestation is stored
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag="${RELEASE_TAG:-$INPUT_TAG}"
+          [ -n "$tag" ] || { echo "::error::no tag to attest"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Download the uploaded assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p assets
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D assets
+          ls -l assets
+      - name: Attest the assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*

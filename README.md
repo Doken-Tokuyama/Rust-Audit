@@ -22,6 +22,13 @@ Nothing is fetched or executed at install time, and
 the wheel carries the same `rust_audit.py` as the signed release asset — so the
 verify-before-use chain below still applies to the script you download.
 
+The wheel's digest is attested by the workflow that built it, so you can check
+where it came from before running it:
+
+```bash
+gh attestation verify rust_audit-*-py3-none-any.whl -R Doken-Tokuyama/Rust-Audit
+```
+
 ## Quick start
 
 ```bash

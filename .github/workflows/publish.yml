@@ -34,6 +34,13 @@ jobs:
   build:
     name: build distributions
     runs-on: ubuntu-latest
+    # `id-token` + `attestations`: the build-provenance attestation below is
+    # signed with this repository's OIDC identity and stored on GitHub. It is
+    # what lets a user run `gh attestation verify` on the wheel they install.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -88,6 +95,14 @@ jobs:
           /tmp/check/bin/pip show rust-audit | grep -E '^(Name|Version):'
           /tmp/check/bin/rust-audit selftest
           /tmp/check/bin/rustaudit selftest
+      - name: Attest the built distributions
+        # Binds each file's digest to this workflow run and repository, so the
+        # PyPI wheel can be checked back to the build that produced it:
+        #   gh attestation verify rust_audit-<version>-py3-none-any.whl \
+        #     --repo Doken-Tokuyama/Rust-Audit
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/main/*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
