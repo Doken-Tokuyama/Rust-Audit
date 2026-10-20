@@ -515,6 +515,12 @@ def make_cut_repo(path, keytype, keydata):
         "```bash\nscripts/verify_release.sh v0.2.0 ./rust_audit.py\n```\n")
     (path / "SKILL.md").write_text(
         "scripts/verify_release.sh v0.2.0 ./rust_audit.py\n")
+    # --cut cuts both PyPI distributions, so the alias metadata is part of its
+    # surface: without it here the version bump has nothing to edit.
+    (path / "packaging" / "rustaudit-alias").mkdir(parents=True)
+    (path / "packaging" / "rustaudit-alias" / "pyproject.toml").write_text(
+        '[project]\nname = "rustaudit"\nversion = "0.2.0"\n'
+        'dependencies = ["rust-audit>=0.2.0"]\n')
     (path / "SECURITY.md").write_text(
         f'release@rust-audit namespaces="file" {keytype} {keydata}\n')
     cmd("git", "init", "-q", path)
@@ -541,6 +547,11 @@ def test_cut_releases_in_one_command(release, tmp_path):
                     RA_REPO_ROOT=str(repo))
     assert r.returncode == 0, r.stdout + r.stderr
     assert 'VERSION = "9.9.9"' in (repo / "scripts" / "rust_audit.py").read_text()
+    alias = (repo / "packaging" / "rustaudit-alias" / "pyproject.toml").read_text()
+    assert 'version = "9.9.9"' in alias
+    assert 'rust-audit>=9.9.9' in alias, (
+        "the alias dependency floor must follow the tag, or pip installs an "
+        "older rust-audit behind the alias")
     for doc in ("README.md", "SKILL.md"):
         assert "verify_release.sh v9.9.9" in (repo / doc).read_text()
     assert cmd("git", "-C", origin, "rev-parse", "v9.9.9").returncode == 0

@@ -1,0 +1,112 @@
+# Publish to PyPI when a release is published: `rust-audit` (the real
+# package, one stdlib module plus its data) and `rustaudit` (a metadata-only
+# alias that depends on it, so both spellings of the name resolve).
+#
+# Trusted publishing (OIDC): the `id-token: write` permission replaces an API
+# token. Nothing secret lives in this repository and nothing needs rotating.
+#
+# One-time setup on PyPI — a pending publisher for EACH project, same claims:
+#   https://pypi.org/manage/account/publishing/
+#     owner:       Doken-Tokuyama
+#     repository:  Rust-Audit
+#     workflow:    publish.yml
+#     environment: pypi
+# A stale or missing entry fails with `invalid-publisher` and uploads nothing.
+# The `pypi` environment must exist on the repository.
+#
+# The wheel ships scripts/rust_audit.py unchanged (the same file the signed
+# GitHub asset carries), plus resources/ and templates/deny.toml as data.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0          # tags: the version guard below reads them
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Refuse to publish an untagged version
+        # PyPI versions are immutable. A manual run from an untagged `main`
+        # would upload the current VERSION with code that no signed release
+        # asset vouches for — the exact mismatch this workflow exists to avoid.
+        run: |
+          version=$(python - <<'PY'
+          import re
+          src = open("scripts/rust_audit.py", encoding="utf-8").read()
+          print(re.search(r'^VERSION = "([^"]+)"', src, re.M).group(1))
+          PY
+          )
+          echo "VERSION = $version"
+          git rev-parse "v$version" >/dev/null \
+            || { echo "::error::v$version is not tagged: cut the release first (scripts/release.sh --cut)"; exit 1; }
+          git show "v$version:scripts/rust_audit.py" > /tmp/tagged.py
+          cmp -s /tmp/tagged.py scripts/rust_audit.py || {
+            echo "::error::scripts/rust_audit.py differs from v$version — the wheel would not match the signed asset; bump the version and cut a release"
+            exit 1
+          }
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build --outdir dist/main
+          python -m build packaging/rustaudit-alias --outdir dist/alias
+      - name: The wheel must contain the tool and its data
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          wheels = glob.glob("dist/main/*.whl")
+          assert len(wheels) == 1, wheels
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          required = ["rust_audit.py",
+                      "data/share/rustaudit/resources/popular_crates.txt",
+                      "data/share/rustaudit/resources/suspicious_names.txt",
+                      "data/share/rustaudit/templates/deny.toml"]
+          missing = [r for r in required
+                     if not any(n.endswith(r) for n in names)]
+          print("\n".join(names))
+          sys.exit(f"wheel is missing: {missing}" if missing else 0)
+          PY
+      - name: Both names install and the command self-tests
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install --no-index \
+            --find-links dist/main --find-links dist/alias rustaudit
+          /tmp/check/bin/pip show rust-audit rustaudit | grep -E '^(Name|Version):'
+          /tmp/check/bin/rust-audit selftest
+          /tmp/check/bin/rustaudit selftest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: upload to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish rust-audit
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist/main
+      - name: Publish the rustaudit alias
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist/alias

@@ -15,6 +15,12 @@ together with `~/.claude/skills` and each project's own `.freebuff/skills` /
 `.agents/skills`), so **no per-project step exists** — current and future
 projects alike resolve the same package.
 
+The wrapper is only half of it: the auditor itself can come from a checkout
+(`RUST_AUDIT_HOME`) **or** from PyPI (`pipx install rust-audit`, which puts
+`rust-audit` and `rustaudit` on the PATH). Pick one; mixing a stale checkout
+with a fresh wheel is how two different versions end up auditing the same
+workspace.
+
 ## Install
 
 From the repo root:

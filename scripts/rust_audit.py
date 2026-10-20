@@ -576,8 +576,29 @@ def levenshtein(a: str, b: str) -> int:
 # --------------------------------------------------------------------------
 # Bundled resources (also loadable from the skill's resources/ directory)
 # --------------------------------------------------------------------------
+def _data_dir(name: str) -> Path:
+    """Where the bundled data lives, in every install shape.
+
+    Checkout: `scripts/rust_audit.py` -> `../resources` (repo root).
+    Wheel: the module sits in site-packages, so the data installed by
+    `data-files` is under `<sys.prefix>/share/rustaudit/`.
+    """
+    here = Path(__file__).resolve().parent
+    candidates = (here / name,
+                  here.parent / name,
+                  Path(sys.prefix) / "share" / "rustaudit" / name)
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
 def _resource_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "resources"
+    return _data_dir("resources")
+
+
+def _template_dir() -> Path:
+    return _data_dir("templates")
 
 
 def load_name_list(filename: str, fallback: set[str]) -> set[str]:
@@ -2103,7 +2124,7 @@ def run_safe_fixes(root: Path, findings: list[Finding], units: list[FileUnit],
         tier4 = any(f.tier == 4 for f in findings)
         deny = root / "deny.toml"
         if tier4 and not deny.exists():
-            template = Path(__file__).resolve().parent.parent / "templates" / "deny.toml"
+            template = _template_dir() / "deny.toml"
             deny.write_text(template.read_text(encoding="utf-8") if template.exists() else DENY_TEMPLATE,
                             encoding="utf-8")
             report["created"].append("deny.toml")

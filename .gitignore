@@ -12,3 +12,8 @@ report/
 .venv/
 target/
 Cargo.lock
+
+# Packaging artifacts (python -m build, editable installs)
+*.egg-info/
+build/
+dist/

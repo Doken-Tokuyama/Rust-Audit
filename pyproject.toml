@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rust-audit"
+dynamic = ["version"]
+description = "Static auditor and auto-fixer for AI-generated Rust traps — stubs, fake tests, swallowed errors, panic/unsafe misuse, hallucinated or typosquatted crates"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Antonio Cantallops Alba", email = "contact@exyonq.org" }]
+keywords = [
+  "rust",
+  "audit",
+  "linter",
+  "static-analysis",
+  "ai-generated-code",
+  "supply-chain",
+  "typosquatting",
+  "agent-skills",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0"]
+
+[project.scripts]
+rust-audit = "rust_audit:main"
+# Same entry point under the one-word spelling; the `rustaudit` distribution on
+# PyPI is an alias that pulls this one in, so either name on the prompt runs
+# the same code once this package is installed.
+rustaudit = "rust_audit:main"
+
+[project.urls]
+Homepage = "https://github.com/Doken-Tokuyama/Rust-Audit"
+Source = "https://github.com/Doken-Tokuyama/Rust-Audit"
+Issues = "https://github.com/Doken-Tokuyama/Rust-Audit/issues"
+Documentation = "https://github.com/Doken-Tokuyama/Rust-Audit/blob/main/SKILL.md"
+
+# The tool is one stdlib-only module: scripts/rust_audit.py is the single
+# source of truth and also the file published as the signed GitHub asset.
+# The wheel ships exactly that file, so `rustaudit` from PyPI and the
+# verified release asset run the same code.
+[tool.setuptools]
+py-modules = ["rust_audit"]
+package-dir = { "" = "scripts" }
+
+[tool.setuptools.dynamic]
+version = { attr = "rust_audit.VERSION" }
+
+# Curated data the analyzer prefers at runtime, and the policy template `fix`
+# copies. Both have embedded fallbacks, so a wheel without them still works —
+# which is why they are declared here instead of being loaded from the
+# checkout: losing them silently would degrade dependency detection.
+[tool.setuptools.data-files]
+"share/rustaudit/resources" = [
+  "resources/popular_crates.txt",
+  "resources/suspicious_names.txt",
+]
+"share/rustaudit/templates" = ["templates/deny.toml"]

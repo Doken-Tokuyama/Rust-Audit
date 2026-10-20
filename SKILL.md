@@ -11,6 +11,15 @@ Use this skill when the user says: "audit this Rust code", "review AI-generated
 Rust", "find stubs / fakes / fake tests", "check my dependencies for
 hallucinated crates", "fix these findings", or invokes `Rust Audit`.
 
+## Install
+
+From PyPI: `pipx install rust-audit` (or `pip install rust-audit`), which
+puts `rust-audit` and `rustaudit` on the PATH; `rust-audit selftest` must
+print `selftest PASS`. The wheel carries this same `rust_audit.py`, so the
+verify-before-use chain below still applies to a downloaded release asset.
+The commands below assume a checkout; with the package installed, drop the
+`python3 scripts/rust_audit.py` prefix and call `rust-audit <subcommand>`.
+
 ## Quick start
 
 **Verify before use:** when `rust_audit.py` arrives as a release download,

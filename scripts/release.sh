@@ -61,12 +61,18 @@ if [ "${1:-}" = "--cut" ]; then
   done
 
   new="${TAG#v}"
+  ALIAS="$REPO_ROOT/packaging/rustaudit-alias/pyproject.toml"
   edit "s/^VERSION = \".*\"/VERSION = \"$new\"/" "$REPO_ROOT/scripts/rust_audit.py"
+  # The PyPI alias carries its own version and dependency floor: keep both in
+  # step with the tag, or `pip install rustaudit` resolves to an older wheel.
+  edit "s/^version = \".*\"/version = \"$new\"/" "$ALIAS"
+  edit "s/\"rust-audit>=.*\"/\"rust-audit>=$new\"/" "$ALIAS"
   for doc in README.md SKILL.md; do
     edit "s/(verify_release\.sh +)v[0-9]+\.[0-9]+\.[0-9]+/\1$TAG/g" "$REPO_ROOT/$doc"
   done
   git -C "$REPO_ROOT" commit -q -m "Cut $TAG: version bump and verify-before-use pins" \
-    -- scripts/rust_audit.py README.md SKILL.md || die "nothing to commit for $TAG"
+    -- scripts/rust_audit.py README.md SKILL.md \
+    packaging/rustaudit-alias/pyproject.toml || die "nothing to commit for $TAG"
   git -C "$REPO_ROOT" tag "$TAG" || die "cannot tag $TAG"
   if git -C "$REPO_ROOT" log origin/main..HEAD --format=%b 2>/dev/null | grep -qiE '^co-authored-by:'; then
     die "pre-push criterion failed: a commit carries a co-author trailer"

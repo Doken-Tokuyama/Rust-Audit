@@ -159,6 +159,27 @@ repository (or a private one on Enterprise Cloud), which is the case since
 the repository went public on 2026-10-20; adding them would not change the
 asset format, only what a verifier can additionally check.
 
+## PyPI channel (v0.2.2+) — what a wheel does and does not prove
+
+The tool is also published as `rust-audit` (alias: `rustaudit`) with **trusted
+publishing** — GitHub's OIDC identity replaces an API token, so no upload
+secret exists in this repository. The wheel ships `scripts/rust_audit.py`
+byte for byte (the same file the signed GitHub asset carries) plus the curated
+data under `share/rustaudit/`; `rust-audit selftest` runs the same rules.
+
+What each channel proves — they are **not** interchangeable:
+
+| Channel | Proves | Does not prove |
+|---|---|---|
+| GitHub release asset | *those exact bytes* were published by the holder of the pinned key (SSH signature, checksum, tag identity, receipt) | that the build machine was clean |
+| PyPI wheel/sdist | *built from this repository at this tag*, by the repository's own workflow (OIDC identity, recorded hashes) | anything about the bytes beyond what the build did |
+
+So: verify a downloaded `rust_audit.py` with the chain above; install from PyPI
+when you want the command on your `PATH`. `pip install --require-hashes` with
+the published hashes is the closest equivalent for the wheel. The evaluator
+the wheel runs is the same code, and `tests/test_packaging.py` fails if the
+packaged module and the repo module ever drift apart.
+
 ## Inherent risk (any toolchain auditor)
 
 `fix` and the cargo evidence pipeline **compile the target and run its
