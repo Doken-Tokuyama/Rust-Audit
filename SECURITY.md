@@ -135,8 +135,9 @@ workflow re-runs the same chain once more and keeps its receipt with the
 run. `release.sh TAG STAGEDIR` serves pre-staged assets: same gate,
 same upload rule.
 
-The same chain by hand — downloads need `gh` (private repository) or an
-authenticated `curl`; the verification itself needs only `ssh-keygen` and a
+The same chain by hand — the repository is public, so the downloads need no
+authentication (`curl -LO` from the release URL, or `gh release download`
+for a logged-in `gh`); the verification itself needs only `ssh-keygen` and a
 checksum tool, both preinstalled on macOS/Linux:
 
 ```bash
@@ -153,11 +154,10 @@ show `rust_audit.py: OK`.
 **Scope (honest):** the signature proves *integrity and key identity* —
 the bytes are exactly what the holder of this key published. It is **not
 CI provenance**: GitHub's native artifact attestations
-(`actions/attest`) are unavailable here (private repository on a non-Enterprise
-plan — GitHub gates them to public repos, or private repos on Enterprise
-Cloud), which was an explicit decision to keep the repository private. If
-the repository ever goes public, GitHub attestations can layer on top
-without changing the asset format.
+(`actions/attest`) are **not wired in yet**. They required a public
+repository (or a private one on Enterprise Cloud), which is the case since
+the repository went public on 2026-10-20; adding them would not change the
+asset format, only what a verifier can additionally check.
 
 ## Inherent risk (any toolchain auditor)
 

@@ -27,8 +27,9 @@
 #
 # Exit: 0 released · 1 the gate refused the staged assets, or the uploaded
 #       bytes failed the post-publish chain · 2 environment/usage error
-# Needs: gh (authenticated — the repository is private) plus what
-#        verify_release.sh needs for --dir (ssh-keygen, git, shasum/sha256sum).
+# Needs: gh authenticated as an account with release access to the
+#        repository, plus what verify_release.sh needs for --dir
+#        (ssh-keygen, git, shasum/sha256sum).
 
 set -u
 
