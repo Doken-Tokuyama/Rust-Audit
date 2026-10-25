@@ -60,31 +60,51 @@ TOOL = ROOT / "scripts" / "rust_audit.py"
 # methods (0 pure-argument cases in 450k lines), so redundancy is not provable.
 # The macro name is part of the identity: assert_ne! vs assert_eq! assert
 # opposites and can never be duplicates of each other.
+#
+# Fourth deliberate update (2026-10-25, auditing EQProxy v0.8): six claims
+# proved wrong on real code, each now covered by tests/test_rule_regressions.py.
+#   - R03: `#[serde(default = "helper")]` constant helpers are serde's
+#     documented idiom, not stubs; inline format captures (`"{name}"`) do use
+#     their parameter even though it never appears outside the string.
+#   - R04: a format template or an argument of format!/Err()/ok_or_else() is a
+#     message, not placeholder data; a file under tests/ is test code even
+#     outside a #[test] fn (fixtures and consts included).
+#   - R12: the RFC 4648 base64 alphabets are protocol tables, not secrets.
+#   - R16: `lock().await` is a tokio::sync mutex; holding its guard across an
+#     await is the contract. Only a synchronous guard left across an await is
+#     a deadlock risk.
+#   - R18c/R18d: a declared dependency or a workspace member can be neither a
+#     hallucinated name nor slopsquatting bait; a typo in Cargo.toml stays
+#     R20's job. thiserror's published major is 2.
+#   - R20: h2, http, h3 and md-5 are well-known protocol crates.
+# Deltas: ripgrep 321 -> 309 (R04 -5, R09 -3, R12 -1, R18c -2, R18d -1);
+# tokio 2436 -> 2366 (R04 -4, R09 -41, R10 -1, R16 -11, R18c -2, R18d -2,
+# R20 -1). Every removed finding was re-read in the pinned source.
 PROJECTS = {
     "ripgrep": {
         "url": "https://github.com/BurntSushi/ripgrep",
         "sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
         "clean_rule": "R01",  # absent here: `scan --rules R01` must exit 0
-        "total": 321,
-        "by_severity": {"critical": 2, "high": 160, "medium": 19,
+        "total": 309,
+        "by_severity": {"critical": 0, "high": 150, "medium": 19,
                         "low": 124, "info": 16},
         "by_rule": {
-            "R02": 124, "R09": 140, "R04": 22, "R14": 12, "R10": 6,
-            "R03": 4, "R20": 3, "R11": 2, "R18c": 2, "R08": 1, "R12": 1,
-            "R18a": 1, "R18d": 1, "R18e": 1, "R21": 1,
+            "R02": 124, "R09": 137, "R04": 17, "R14": 12, "R10": 6,
+            "R03": 4, "R20": 3, "R11": 2, "R08": 1, "R18a": 1,
+            "R18e": 1, "R21": 1,
         },
     },
     "tokio": {
         "url": "https://github.com/tokio-rs/tokio",
         "sha": "cdd9dae3aa5056e23dc4d5bc4f852ab8fbf27aff",
         "clean_rule": "R13",  # absent here: `scan --rules R13` must exit 0
-        "total": 2436,
-        "by_severity": {"critical": 13, "high": 1245, "medium": 259,
-                        "low": 739, "info": 180},
+        "total": 2366,
+        "by_severity": {"critical": 8, "high": 1178, "medium": 258,
+                        "low": 739, "info": 183},
         "by_rule": {
-            "R02": 728, "R09": 541, "R11": 796, "R08": 160, "R10": 76,
-            "R16": 49, "R01": 16, "R17": 9, "R18c": 6, "R04": 5, "R14": 5,
-            "R18a": 5, "R03": 30, "R20": 3, "R18d": 3, "R06": 2, "R07": 1,
+            "R02": 728, "R09": 500, "R11": 788, "R08": 160, "R10": 75,
+            "R16": 38, "R01": 16, "R17": 9, "R18c": 4, "R04": 1, "R14": 5,
+            "R18a": 5, "R03": 30, "R20": 2, "R18d": 1, "R06": 2, "R07": 1,
             "R18e": 1,
         },
     },

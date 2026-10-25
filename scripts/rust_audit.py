@@ -48,7 +48,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 TOOL_NAME = "Rust Audit"
 
 # Identity of the file that is actually running. Two copies of this auditor
@@ -144,7 +144,7 @@ STD_CRATES = {"std", "core", "alloc", "proc_macro", "test"}
 # Known major versions of popular crates: offline "impossible version" check.
 KNOWN_MAJORS = {
     "tokio": 1, "serde": 1, "serde_json": 1, "axum": 0, "hyper": 1,
-    "reqwest": 0, "clap": 4, "anyhow": 1, "thiserror": 1, "rand": 0,
+    "reqwest": 0, "clap": 4, "anyhow": 1, "thiserror": 2, "rand": 0,
     "regex": 1, "log": 0, "env_logger": 0, "chrono": 0, "uuid": 1,
     "once_cell": 1, "tracing": 0, "tower": 0, "tonic": 0, "prost": 0,
     "sqlx": 0, "diesel": 2, "rocket": 0, "actix-web": 4, "warp": 0,
@@ -641,8 +641,9 @@ FALLBACK_POPULAR = {
     "tower", "tonic", "prost", "sqlx", "diesel", "rocket", "actix-web",
     "warp", "mime", "semver", "criterion", "lazy_static", "pin-project",
     "dashmap", "tracing-subscriber", "serde_derive", "dotenv", "base64",
-    "hex", "sha2", "md5", "num-traits", "rayon", "crossbeam", "mio",
-    "socket2", "trust-dns-resolver", "rustls", "openssl", "native-tls",
+    "hex", "sha2", "md5", "md-5", "h2", "http", "h3", "num-traits", "rayon",
+    "crossbeam", "mio", "socket2", "trust-dns-resolver", "rustls", "openssl",
+    "native-tls",
 }
 FALLBACK_SUSPICIOUS = {
     "rust-http-client", "rust-database", "rust-utils", "async-utils",
@@ -681,6 +682,10 @@ def _prod_severity(unit: FileUnit, fn: FnInfo | None, prod: str, test: str = "in
                    example: str = "info") -> str | None:
     """Severity by context; None means 'do not report'."""
     if fn is not None and fn.is_test:
+        return None if test == "skip" else test
+    # A file under `tests/` is test code even when the literal sits outside a
+    # `#[test]` fn (fixtures, consts, helpers): never a production defect.
+    if unit.kind == "test":
         return None if test == "skip" else test
     if unit.kind in ("example", "bench"):
         return example
@@ -892,6 +897,16 @@ def check_r02(unit: FileUnit, out: list[Finding]) -> None:
 
 
 def check_r03(unit: FileUnit, out: list[Finding]) -> None:
+    # `#[serde(default = "helper")]` names a function whose whole job is to
+    # return the documented default: a constant return is the contract, not
+    # stubbed logic.
+    serde_defaults = {
+        m.group(1).rsplit("::", 1)[-1]
+        for m in re.finditer(
+            r'#\[\s*serde\s*\([^]]*?\bdefault\s*=\s*"([^"]+)"',
+            unit.src.masked_comments,
+        )
+    }
     for fn in unit.fns:
         if fn.is_test or unit.kind in ("example", "bench"):
             continue
@@ -915,7 +930,7 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
             ))
             continue
         visible = mask_source(raw_body, False, True)  # strings visible, comments hidden
-        if not in_contract and re.fullmatch(
+        if fn.name not in serde_defaults and not in_contract and re.fullmatch(
                 r"(?:return\s+)?(?:true|false|-?\d+(?:\.\d+)?[a-z]*|\"[^\"\n]*\"|"
                 r"'(?:\\.|[^\\'])'|Self|[A-Z][A-Z0-9_]{2,})\s*;?",
                 visible.strip()):
@@ -940,9 +955,12 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
                             fn.sig.split("(", 1)[-1].split(")", 1)[0])
         params = [p for p in params if p not in ("self",) and not p.startswith("_")]
         # `#[allow(unused_variables)]` declares the ignored params intentional.
-        if params and len(re.findall(r"\w+", fn.body)) < 30 \
+        # `visible` (comments hidden, literals visible) is what a reader sees:
+        # inline format captures like `format!("{name}")` use the parameter
+        # even though it never appears outside the string.
+        if params and len(re.findall(r"\w+", visible)) < 30 \
                 and not any("unused_variables" in a for a in fn.attrs):
-            missing = [p for p in params if not re.search(r"\b" + re.escape(p) + r"\b", fn.body)]
+            missing = [p for p in params if not re.search(r"\b" + re.escape(p) + r"\b", visible)]
             if len(missing) == len(params):
                 out.append(Finding(
                     "R03", "high",
@@ -953,10 +971,22 @@ def check_r03(unit: FileUnit, out: list[Finding]) -> None:
                 ))
 
 
+# A literal that is a message, not data: a format template, or the argument
+# of a formatting/error macro. R04's claim is "placeholder string used as
+# real data"; an error message that mentions the word is not data.
+_MESSAGE_TAIL_RE = re.compile(
+    r"(?:(?:format|print|println|eprintln|write|writeln|panic|assert\w*)!\s*\(\s*"
+    r"|ok_or_else\s*\(\s*\|\|\s*|Err\s*\(\s*)$"
+)
+
+
 def check_r04(unit: FileUnit, out: list[Finding]) -> None:
     strings = unit.src.masked_comments
     for m in re.finditer(r"\"([^\"\\\n]{3,120})\"", strings):
         val = m.group(1)
+        before = strings[max(0, m.start() - 80): m.start()]
+        if "{" in val or _MESSAGE_TAIL_RE.search(before):
+            continue
         if re.search(r"(?i)\b(lorem ipsum|lorem|dummy|placeholder|sample value|test data|foo bar|fixme|xxx)\b", val) \
            or val in ("example.com", "example.org", "example.net"):
             fn = locate_fn(unit.fns, m.start())
@@ -1142,6 +1172,14 @@ SECRET_ASSIGN_RE = re.compile(
 )
 SECRET_LITERAL_RE = re.compile(r"\"[A-Za-z0-9+/=_%\-]{40,}\"|\"[0-9a-fA-F]{32,}\"")
 
+# Public alphabets (RFC 4648 and hex) are protocol tables, not credentials.
+PUBLIC_ALPHABETS = {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+    "0123456789abcdef",
+    "0123456789ABCDEF",
+}
+
 
 def check_r12(unit: FileUnit, out: list[Finding]) -> None:
     raw = unit.src.text
@@ -1166,6 +1204,8 @@ def check_r12(unit: FileUnit, out: list[Finding]) -> None:
             fix_hint="Read from std::env::var (fix --safe rewrites the assignment and fills .env.example).",
         ))
     for m in SECRET_LITERAL_RE.finditer(raw):
+        if m.group(0).strip('"') in PUBLIC_ALPHABETS:
+            continue
         fn = locate_fn(unit.fns, m.start())
         if fn is not None and fn.is_test:
             continue
@@ -1260,7 +1300,10 @@ def check_r16(unit: FileUnit, out: list[Finding], deps: list[Dep]) -> None:
                     fix_hint="Await the future instead of blocking the runtime thread.",
                 ))
             lock_m = re.search(r"\.(?:lock|read|write)\s*\(\s*\)", fn.body)
-            if lock_m and ".await" in fn.body[lock_m.end():]:
+            # `lock().await` is an async mutex (tokio::sync): holding its guard
+            # across an await is the documented contract, not a deadlock.
+            if lock_m and not re.match(r"\s*\.await\b", fn.body[lock_m.end():]) \
+                    and ".await" in fn.body[lock_m.end():]:
                 out.append(Finding(
                     "R16", "high",
                     f"`{fn.name}` holds a synchronous Mutex/RwLock guard across `.await` (deadlock/blocking).",
@@ -1390,6 +1433,11 @@ def check_crate_refs(units: list[FileUnit], reg: Registry, out: list[Finding]) -
                 fix_hint=f"Qualify the path: `use std::{root}::...`.",
             ))
             continue
+        # A declared dependency is the name the author intends: it cannot be a
+        # hallucinated crate, a near-miss or an undeclared root. A misspelling
+        # in Cargo.toml is R20's job, judged against the popularity corpus.
+        if _norm(root) in known:
+            continue
         if _norm(root) in {_norm(p) for p in popular}:
             continue
         # near-miss against declared deps and popular crates; sorted() in each
@@ -1421,8 +1469,6 @@ def check_crate_refs(units: list[FileUnit], reg: Registry, out: list[Finding]) -
                 rel, line, "", evidence=root, fix="none",
                 fix_hint="Do not add this dependency. Verify the real crate on crates.io/docs.rs first.",
             ))
-            continue
-        if root in known:
             continue
         out.append(Finding(
             "R18a", "high",
@@ -2427,8 +2473,10 @@ pub fn q(_c: Cache) {}
     "src/r18b.rs": """use fs::File;
 pub fn open() -> Option<File> { None }
 """,
-    "src/r18c.rs": """use serdee::Serialize;
-pub fn s<T: Serialize>(_t: T) {}
+    # R18c is for a root that is NOT declared: `serdee` above is declared
+    # and is R20's job. This one misses serde_json by one character.
+    "src/r18c.rs": """use serde_jsonn::Value;
+pub fn s<T>(_t: T) -> Option<Value> { None }
 """,
     "src/r20.rs": "pub fn nothing() {}",
     "src/r21.rs": "fn main() { std::process::Command::new(\"curl\").status().unwrap(); }",

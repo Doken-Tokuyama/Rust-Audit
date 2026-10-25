@@ -285,6 +285,11 @@ winnow
 chumsky
 lalrpop
 logos
+# HTTP/2 and HTTP/3 protocol stacks (hyper's building blocks).
+h2
+http
+h3
+md-5
 ariadne
 codespan-reporting
 annotate-snippets
