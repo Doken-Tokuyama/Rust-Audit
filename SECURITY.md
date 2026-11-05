@@ -71,13 +71,19 @@ re-audit 2026-10-18, the E2E suite and the proof runs — evidence under
 substituted file.
 
 Signing key — pinned **here** on purpose; never trust a key that arrives
-with the download (fingerprint `SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU`):
+with the download (current fingerprint `SHA256:HfE00KX0+biZOhDzdQw2iVVFn6EqkdhHG3l06xHG1KM`, Ed25519):
 
 ```
-release@rust-audit namespaces="file" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDAhVju61wmyPVI9EQiBN5nr8AyTTDSJ2YpxENURDUxAlGHWmBsFocMLHacjl2upKgP2R4jBwQ9gvhByQt0NllM87kFJstufjWv01vukk4G9IP/wtV5Xypqp6ZvvcDGNf6mJR1h1T2YZi6EtaQobGgxjteZvJBvRESltv03chfxti1bP3SWvlTcFEIKpKiSKoRzdDItWH5VMMxSZHoKtsESBY9WlbPg++IVReYhukmGarMoyX3nHAuXk8RHoHK+9YfHz5kG/s2p9xLsxHramoiWfhbrqAqBNxVYwiNcwsQlMQEU3L5Xx/eXFHpFwBneSNc7k+ZUDjaCDZAyiN5Nj7Ol
+release@rust-audit namespaces="file" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHVOoNhPEy64icXo8TrbbuUeqFnmcuiObH6X+Nid3lf+ info@exyonq.org
 ```
 
 This line is also shipped as the `allowed_signers` release asset.
+
+**Key rotation (v0.2.9).** The previous RSA key
+(`SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU`) signed v0.2.0–v0.2.8 and
+is no longer accepted for new releases: `verify_release.sh` pins it only for
+tags up to `v0.2.8`, so those historical assets stay verifiable. A v0.2.9+
+release must carry the Ed25519 key above.
 
 One command — downloads the assets and runs the whole chain (key pin →
 signature → checksum → tag identity → receipt cross-check), exit 0 only on
@@ -152,21 +158,23 @@ exit 1 — assets verified, installation not yet possible. `release.sh TAG
 STAGEDIR` serves pre-staged assets: same gates (CI against the existing tag),
 same upload rule.
 
-The same chain by hand — the repository is public, so the downloads need no
+The same chain by hand for v0.2.9 and newer — the repository is public, so the downloads need no
 authentication (`curl -LO` from the release URL, or `gh release download`
 for a logged-in `gh`); the verification itself needs only `ssh-keygen` and a
 checksum tool, both preinstalled on macOS/Linux:
 
 ```bash
 gh release download v0.2.0 -R Doken-Tokuyama/Rust-Audit   # all four assets
-sed 's/.*ssh-rsa/ssh-rsa/' allowed_signers | ssh-keygen -lf -
-#   must show SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU
+sed 's/.*ssh-ed25519/ssh-ed25519/' allowed_signers | ssh-keygen -lf -
+#   must show SHA256:HfE00KX0+biZOhDzdQw2iVVFn6EqkdhHG3l06xHG1KM
 ssh-keygen -Y verify -f allowed_signers -I release@rust-audit -n file -s SHA256SUMS.sig < SHA256SUMS
 shasum -a 256 -c SHA256SUMS      # Linux: sha256sum -c SHA256SUMS
 ```
 
 The verify step must print `Good "file" signature`; the checksum step must
-show `rust_audit.py: OK`.
+show `rust_audit.py: OK`. For v0.2.0–v0.2.8, use
+`scripts/verify_release.sh <tag>`: it selects the legacy RSA pin for those
+tags; the by-hand snippet above targets the current Ed25519 key.
 
 **Scope (honest):** the signature proves *integrity and key identity* —
 the bytes are exactly what the holder of this key published. It says nothing

@@ -156,7 +156,7 @@ def test_chain_verifies_with_expected_key(release):
 
 def test_foreign_signing_key_fails_key_pin(release):
     _, verify, _ = release
-    r = verify(RA_EXPECT_FINGERPRINT="")   # falls back to the real pinned key
+    r = verify(RA_EXPECT_FINGERPRINT="")   # tag-selected pin, not the fixture key
     assert r.returncode == 1
     assert "not the pinned key" in r.stderr
     assert "VERIFIED" not in r.stdout
@@ -289,6 +289,35 @@ def test_staged_foreign_signing_key_fails_key_pin(release):
     r = verify("--dir", str(fx), "v0.0.0-test", RA_EXPECT_FINGERPRINT="")
     assert r.returncode == 1
     assert "not the pinned key" in r.stderr
+
+
+def test_legacy_pin_covers_releases_through_v028(release):
+    fx, verify, _ = release
+    r = verify("--dir", str(fx), "v0.2.8", RA_EXPECT_FINGERPRINT="")
+    assert r.returncode == 1
+    assert "SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU" in r.stderr
+    assert "SHA256:HfE00KX0+biZOhDzdQw2iVVFn6EqkdhHG3l06xHG1KM" not in r.stderr
+
+
+def test_current_pin_covers_releases_after_v028(release):
+    fx, verify, _ = release
+    r = verify("--dir", str(fx), "v0.2.9", RA_EXPECT_FINGERPRINT="")
+    assert r.returncode == 1
+    assert "SHA256:HfE00KX0+biZOhDzdQw2iVVFn6EqkdhHG3l06xHG1KM" in r.stderr
+    assert "SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU" not in r.stderr
+
+
+def test_security_md_pins_the_current_key():
+    root = SCRIPT.parent.parent
+    security = (root / "SECURITY.md").read_text()
+    line = next(l for l in security.splitlines()
+                if l.startswith("release@rust-audit "))
+    key = " ".join(line.split()[2:4])
+    fp = cmd("ssh-keygen", "-lf", "-", input=key + "\n").stdout.split()[1]
+    verifier = (root / "scripts" / "verify_release.sh").read_text()
+    assert f'PINNED_FINGERPRINT="{fp}"' in verifier
+    assert 'LEGACY_FINGERPRINT="SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU"' in verifier
+    assert 'LEGACY_LAST_TAG="v0.2.8"' in verifier
 
 
 def test_staged_missing_tag_is_environment_error(release, tmp_path):

@@ -35,17 +35,23 @@
 # calculation (tag, repo, key fingerprint, result, and the manifest checksum
 # that binds the receipt to the exact bytes): a mismatch fails with exit 1.
 #
-# The pinned fingerprint is the trust anchor and lives here (and in
-# SECURITY.md) on purpose — never in the download. RA_EXPECT_FINGERPRINT
-# overrides it for test fixtures only, and so does RA_REPO_ROOT for the
-# checkout --dir compares the tag against. The tag is not itself signed:
+# The current pinned fingerprint is the trust anchor and lives here (and in
+# SECURITY.md) on purpose — never in the download. The pre-rotation RSA key
+# is pinned separately and accepted only for tags up to LEGACY_LAST_TAG, so
+# historical releases stay verifiable after the v0.2.9 key rotation.
+# RA_EXPECT_FINGERPRINT overrides both for test fixtures only, and so does
+# RA_REPO_ROOT for the checkout --dir compares the tag against. The tag is
+# not itself signed:
 # step 4 binds the attested bytes to the reviewed source tree; the
 # signature in step 2 is the anchor.
 
 set -u
 
 REPO="Doken-Tokuyama/Rust-Audit"
-PINNED_FINGERPRINT="${RA_EXPECT_FINGERPRINT:-SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU}"
+PINNED_FINGERPRINT="SHA256:HfE00KX0+biZOhDzdQw2iVVFn6EqkdhHG3l06xHG1KM"
+LEGACY_FINGERPRINT="SHA256:v/9tBKvWLy+NKzzqtvfH9vYwqLglF2gYYJ6K79LNmjU"
+LEGACY_LAST_TAG="v0.2.8"
+EXPECTED_FINGERPRINT="$PINNED_FINGERPRINT"
 SIGN_IDENTITY="release@rust-audit"
 NAMESPACE="file"
 ASSETS="rust_audit.py SHA256SUMS SHA256SUMS.sig allowed_signers"
@@ -58,6 +64,27 @@ say()  { printf '%s\n' "$*"; }
 pass() { say "PASS  $*"; }
 fail() { say "FAIL  $*" >&2; }
 die()  { say "ERROR $*" >&2; exit 2; }
+
+semver_le() {  # semver_le TAG LIMIT — true when TAG <= LIMIT
+  awk -v a="${1#v}" -v b="${2#v}" 'BEGIN {
+    split(a, x, "."); split(b, y, ".")
+    for (i = 1; i <= 3; i++) {
+      if ((x[i] + 0) < (y[i] + 0)) exit 0
+      if ((x[i] + 0) > (y[i] + 0)) exit 1
+    }
+    exit 0
+  }'
+}
+
+select_fingerprint() {  # select_fingerprint TAG — override, legacy range, current
+  if [ -n "${RA_EXPECT_FINGERPRINT:-}" ]; then
+    printf '%s' "$RA_EXPECT_FINGERPRINT"
+  elif semver_le "$1" "$LEGACY_LAST_TAG"; then
+    printf '%s' "$LEGACY_FINGERPRINT"
+  else
+    printf '%s' "$PINNED_FINGERPRINT"
+  fi
+}
 
 json_escape() {
   local s=$1
@@ -90,7 +117,7 @@ write_receipt() {  # write_receipt TAG MODE RESULT EXIT_CODE -> prints the path
     printf '  "mode": "%s",\n' "$mode"
     printf '  "verified_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '  "identity": "%s",\n' "$SIGN_IDENTITY"
-    printf '  "fingerprint_expected": "%s",\n' "$(json_escape "$PINNED_FINGERPRINT")"
+    printf '  "fingerprint_expected": "%s",\n' "$(json_escape "$EXPECTED_FINGERPRINT")"
     printf '  "checks": [%s],\n' "$CHECKS"
     printf '  "result": "%s",\n' "$result"
     printf '  "exit_code": %s\n' "$code"
@@ -135,6 +162,7 @@ verify_release() {
   local TAG="$1" VMODE="$2" CHECK_FILE="${3:-}" WORKDIR fp src tagged
   local LBL="release-download"
   [ "$VMODE" = "staged" ] && LBL="staged-dir"
+  EXPECTED_FINGERPRINT=$(select_fingerprint "$TAG")
   CHECKS=""
   say "Verifying $REPO release $TAG ($LBL)"
 
@@ -171,9 +199,9 @@ verify_release() {
     say "ERROR cannot read a key out of allowed_signers" >&2
     finish "$TAG" "$LBL" "ERROR" 2; return $?
   fi
-  if [ "$fp" != "$PINNED_FINGERPRINT" ]; then
-    chk key_pin fail "signing key $fp is not the pinned key $PINNED_FINGERPRINT"
-    fail "signing key $fp is not the pinned key $PINNED_FINGERPRINT"
+  if [ "$fp" != "$EXPECTED_FINGERPRINT" ]; then
+    chk key_pin fail "signing key $fp is not the pinned key $EXPECTED_FINGERPRINT"
+    fail "signing key $fp is not the pinned key $EXPECTED_FINGERPRINT"
     finish "$TAG" "$LBL" "NOT VERIFIED" 1; return $?
   fi
   chk key_pin pass "$fp"
@@ -272,7 +300,7 @@ verify_release() {
       ATT_CK=$(sed -n 's/.*"id" *: *"checksum" *, *"status" *: *"[a-z]*" *, *"detail" *: *"\([^"]*\)".*/\1/p' "$RFILE" | head -1 | sed 's/\\n//g')
       exp_ck=$(tr -d '\n' < "$ASSET_DIR/SHA256SUMS")
       if [ "$ATT_TAG" = "$TAG" ] && [ "$ATT_REPO" = "$REPO" ] \
-         && [ "$ATT_FP" = "$PINNED_FINGERPRINT" ] && [ "$ATT_RES" = "VERIFIED" ] \
+         && [ "$ATT_FP" = "$EXPECTED_FINGERPRINT" ] && [ "$ATT_RES" = "VERIFIED" ] \
          && [ -n "$ATT_CK" ] && [ "$ATT_CK" = "$exp_ck" ] \
          && grep -Eq '"id" *: *"key_pin" *, *"status" *: *"pass"' "$RFILE" \
          && grep -Eq '"id" *: *"signature" *, *"status" *: *"pass"' "$RFILE" \
