@@ -48,7 +48,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 TOOL_NAME = "Rust Audit"
 
 # Identity of the file that is actually running. Two copies of this auditor
@@ -171,6 +171,18 @@ TEST_ATTR_RE = re.compile(
 )
 
 
+def finding_fingerprint(rule_id: str, file: str, function: str, evidence: str) -> str:
+    """Line-independent identity of a finding.
+
+    `line` is metadata: an edit above a finding moves it without changing what
+    was found, so two runs cannot be compared on (rule, file, line). Two
+    identical calls inside one function share one identity (documented).
+    """
+    normalized = re.sub(r"\s+", " ", evidence or "").strip()
+    payload = "\x1f".join((rule_id, file.replace("\\", "/"), function, normalized))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass
 class Finding:
     rule_id: str
@@ -189,9 +201,15 @@ class Finding:
     def tier(self) -> int:
         return RULES.get(self.rule_id, {}).get("tier", 0)
 
+    @property
+    def fingerprint(self) -> str:
+        """Stable identity for baseline diffing (see `finding_fingerprint`)."""
+        return finding_fingerprint(self.rule_id, self.file, self.function, self.evidence)
+
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
         d["tier"] = self.tier
+        d["fingerprint"] = self.fingerprint
         return d
 
 
@@ -1099,17 +1117,28 @@ def check_r08(unit: FileUnit, out: list[Finding]) -> None:
 
 def check_r09(unit: FileUnit, out: list[Finding]) -> None:
     for m in re.finditer(r"\.\s*(unwrap|expect)\s*\(|\bpanic!\s*\(", unit.src.masked_all):
+        what = re.sub(r"\s+", "", m.group(0))
         fn = locate_fn(unit.fns, m.start())
         sev = _prod_severity(unit, fn, "high", "skip", "info")
         if sev is None:
             continue
         name, _ = _ctx_label(unit, fn)
-        what = m.group(0).strip()
+        if what.startswith(".expect") and sev == "high":
+            # `.expect("...")` names the invariant it relies on: still a
+            # production panic path, but a reviewable medium rather than the
+            # same claim as a bare `unwrap()` that documents nothing.
+            sev = "medium"
+            message = "`.expect(..)` panics when its documented invariant is wrong (Option/Result)."
+            hint = "Prefer `?`/`ok_or_else`; keep the invariant message accurate and enforced."
+        elif what.startswith("panic!"):
+            message = "`panic!` aborts the caller's task/process at runtime."
+            hint = "Return an error (or use `debug_assert!` for an internal invariant)."
+        else:
+            message = "`.unwrap()` turns an Option/Result into a panic in production code."
+            hint = "Propagate with `?`, match on the error, or provide a default explicitly."
         out.append(Finding(
-            "R09", sev,
-            f"`{what}` turns an Option/Result into a panic in production code.",
-            unit.rel, unit.src.line_of(m.start()), name, evidence=what, fix="assisted",
-            fix_hint="Propagate with `?`, match on the error, or provide a default explicitly.",
+            "R09", sev, message, unit.rel, unit.src.line_of(m.start()), name,
+            evidence=what, fix="assisted", fix_hint=hint,
         ))
 
 
@@ -1274,8 +1303,72 @@ TOKIO_FEATURE_NEEDS = {
     "io": "io-util", "signal": "signal", "stream": "stream",
 }
 
+# `.read()`/`.write()` is a guard accessor only on an `RwLock`; the same names
+# exist on pooled database handles, files and buffers. A receiver named like
+# one of those is never treated as a lock guard (the heuristic cannot see
+# types); `[rules.R16] ignore_methods` suppresses any remaining shape exactly.
+NON_LOCK_RECEIVERS = {
+    "db", "pool", "conn", "connection", "client", "socket", "stream",
+    "reader", "writer", "file", "buf", "buffer", "fd", "tcp", "udp",
+    "stdin", "stdout", "stderr", "dir", "path", "fs",
+}
 
-def check_r16(unit: FileUnit, out: list[Finding], deps: list[Dep]) -> None:
+_LOCK_CALL_RE = re.compile(
+    r"(?P<recv>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*\.\s*"
+    r"(?P<method>lock|read|write)\s*\(\s*\)"
+)
+
+
+def _method_ignored(recv: str, method: str, patterns) -> bool:
+    """`["db.read"]` ignores `self.db.read()`; `["lock"]` ignores every `.lock()`."""
+    tail = recv.rsplit(".", 1)[-1]
+    for raw in patterns or ():
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        pattern = raw.strip()
+        if "." in pattern:
+            recv_pat, method_pat = pattern.rsplit(".", 1)
+            if method_pat.strip() != method:
+                continue
+            recv_pat = recv_pat.strip()
+            if recv == recv_pat or recv.endswith("." + recv_pat) or tail == recv_pat:
+                return True
+        elif pattern == method:
+            return True
+    return False
+
+
+def _sync_guard_across_await(unit: FileUnit, fn: FnInfo,
+                             ignore_methods) -> tuple[str, str] | None:
+    """A synchronous lock call whose guard is still alive at a later `.await`.
+
+    `lock().await` is a tokio::sync mutex: holding that guard across an await
+    is the contract. `read()`/`write()` only take a guard when the file
+    actually uses an `RwLock`; `db.read()` on a pool returns a reference.
+    """
+    file_has_mutex = bool(re.search(r"\bMutex\b", unit.src.masked_all))
+    file_has_rwlock = bool(re.search(r"\bRwLock\b", unit.src.masked_all))
+    for m in _LOCK_CALL_RE.finditer(fn.body):
+        rest = fn.body[m.end():]
+        if re.match(r"\s*\.\s*await\b", rest) or ".await" not in rest:
+            continue
+        recv = re.sub(r"\s+", "", m.group("recv"))
+        method = m.group("method")
+        tail = recv.rsplit(".", 1)[-1]
+        if _method_ignored(recv, method, ignore_methods):
+            continue
+        if method == "lock":
+            if not (file_has_mutex or file_has_rwlock
+                    or tail in {"lock", "mutex", "mtx", "guard", "gate"}):
+                continue
+        elif not file_has_rwlock or tail in NON_LOCK_RECEIVERS:
+            continue
+        return recv, method
+    return None
+
+
+def check_r16(unit: FileUnit, out: list[Finding], deps: list[Dep],
+              ignore_methods=None) -> None:
     for fn in unit.fns:
         if fn.is_async and not fn.is_test:
             if re.search(r"\b(?:std::)?thread::sleep\s*\(", fn.body):
@@ -1299,15 +1392,14 @@ def check_r16(unit: FileUnit, out: list[Finding], deps: list[Dep]) -> None:
                     unit.rel, fn.line, fn.name, evidence="block_on", fix="none",
                     fix_hint="Await the future instead of blocking the runtime thread.",
                 ))
-            lock_m = re.search(r"\.(?:lock|read|write)\s*\(\s*\)", fn.body)
-            # `lock().await` is an async mutex (tokio::sync): holding its guard
-            # across an await is the documented contract, not a deadlock.
-            if lock_m and not re.match(r"\s*\.await\b", fn.body[lock_m.end():]) \
-                    and ".await" in fn.body[lock_m.end():]:
+            lock_hit = _sync_guard_across_await(unit, fn, ignore_methods)
+            if lock_hit is not None:
+                recv, method = lock_hit
                 out.append(Finding(
                     "R16", "high",
                     f"`{fn.name}` holds a synchronous Mutex/RwLock guard across `.await` (deadlock/blocking).",
-                    unit.rel, fn.line, fn.name, evidence="lock() … .await", fix="none",
+                    unit.rel, fn.line, fn.name,
+                    evidence=f"{recv}.{method}() … .await", fix="none",
                     fix_hint="Drop the guard before the await or use tokio::sync primitives.",
                 ))
         if not fn.is_test and re.search(r"\bfor\b[^{]*\{", fn.body):
@@ -1721,28 +1813,81 @@ DEFAULT_CONFIG = {
 }
 
 
+CONFIG_KEYS = ("rules", "thresholds", "exclude", "corpus")
+
+
+class ConfigError(Exception):
+    """The requested or discovered configuration cannot be used."""
+
+
+def _deep_merge(base: dict, extra: dict) -> dict:
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _discover_config(start: Path) -> Path | None:
+    """`rust-audit.toml` at the scanned path or any parent up to the repo root.
+
+    Scanning `crates/api` must honour the project config at the repository
+    root: requiring `--config` made a forgotten flag silently audit with
+    defaults (566 findings instead of 316 in the reported workspace).
+    """
+    current = start
+    while True:
+        for name in ("rust-audit.toml", ".rust-audit.toml"):
+            candidate = current / name
+            if candidate.is_file():
+                return candidate
+        if (current / ".git").exists() or current.parent == current:
+            return None
+        current = current.parent
+
+
 def load_config(root: Path, explicit: str | None) -> dict:
-    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
-    candidates = []
+    cfg = _deep_merge(json.loads(json.dumps(DEFAULT_CONFIG)), {})
     if explicit:
-        candidates.append(Path(explicit))
-    candidates += [root / "rust-audit.toml", root / ".rust-audit.toml"]
-    for candidate in candidates:
-        if candidate.exists():
-            try:
-                data = tomllib.loads(candidate.read_text(encoding="utf-8"))
-            except Exception as exc:
-                print(f"warning: cannot parse {candidate}: {exc}", file=sys.stderr)
-                continue
-            for key in ("rules", "thresholds", "exclude", "corpus"):
-                if key in data:
-                    if isinstance(data[key], dict) and isinstance(cfg.get(key), dict):
-                        cfg[key].update(data[key])
-                    else:
-                        cfg[key] = data[key]
-            break
+        path: Path | None = Path(explicit)
+        origin = "explicit"
+        if not path.is_file():
+            raise ConfigError(f"config file not found: {path}")
+    else:
+        path = _discover_config(root)
+        origin = "auto-discovered" if path else "defaults"
+    if path is not None:
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise ConfigError(f"cannot read {path}: {exc}") from exc
+        unknown = sorted(set(data) - set(CONFIG_KEYS))
+        if unknown:
+            print(f"warning: {path}: unknown key(s) ignored: {', '.join(unknown)}",
+                  file=sys.stderr)
+        _deep_merge(cfg, data)
+        if not isinstance(cfg.get("rules"), dict):
+            raise ConfigError(f"{path}: `rules` must be a table ([rules] ...)")
     THRESHOLDS.update(cfg.get("thresholds") or {})
+    cfg["_meta"] = {"path": str(path.resolve()) if path else "", "origin": origin}
     return cfg
+
+
+def config_summary(cfg: dict | None) -> dict:
+    """The effective configuration, as reported in the terminal/Markdown/JSON."""
+    cfg = cfg or {}
+    meta = cfg.get("_meta") or {}
+    rules = cfg.get("rules") or {}
+    return {
+        "path": meta.get("path", ""),
+        "origin": meta.get("origin", "not loaded"),
+        "disabled_rules": list(rules.get("disabled") or []),
+        "rule_options": {k: v for k, v in rules.items() if k != "disabled"},
+        "exclude": list(cfg.get("exclude") or []),
+        "thresholds": dict(cfg.get("thresholds") or {}),
+        "corpus": cfg.get("corpus") or "",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -1802,8 +1947,11 @@ def run_scan(root: Path, cfg: dict, online: bool = False):
             uniq_deps.append(d)
     deps = uniq_deps
 
+    rule_options = (cfg.get("rules") or {}).get("R16") or {}
+    ignore_methods = (rule_options.get("ignore_methods")
+                      if isinstance(rule_options, dict) else None)
     for unit in units:
-        check_r16(unit, findings, deps)
+        check_r16(unit, findings, deps, ignore_methods)
 
     corpus: set[str] = set()
     corpus_file = cfg.get("corpus") or ""
@@ -1835,18 +1983,87 @@ def summarize(findings: list[Finding]) -> dict:
             "by_tier": by_tier}
 
 
+class BaselineError(Exception):
+    """The baseline file cannot be read or is not a Rust Audit JSON report."""
+
+
+def load_baseline(path: Path) -> list[dict]:
+    """Findings from an earlier JSON report, with their stable identities."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BaselineError(f"cannot read baseline {path}: {exc}") from exc
+    findings = payload.get("findings") if isinstance(payload, dict) else None
+    if not isinstance(findings, list):
+        raise BaselineError(
+            f"{path} is not a Rust Audit JSON report (no 'findings' list)")
+    rows: list[dict] = []
+    for item in findings:
+        if not isinstance(item, dict) or not item.get("rule_id"):
+            raise BaselineError(f"{path}: malformed finding entry")
+        fingerprint = item.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            # Reports written before fingerprints existed are still usable:
+            # the identity is a pure function of the finding's own fields.
+            fingerprint = finding_fingerprint(
+                str(item.get("rule_id", "")), str(item.get("file", "")),
+                str(item.get("function", "")), str(item.get("evidence", "")))
+        rows.append({"fingerprint": fingerprint,
+                     "rule_id": item.get("rule_id", ""),
+                     "file": item.get("file", ""),
+                     "line": item.get("line", 0),
+                     "message": item.get("message", "")})
+    return rows
+
+
+def baseline_diff(findings: list[Finding], baseline: list[dict],
+                  path: str) -> tuple[dict, list[Finding]]:
+    """New findings plus added/removed/unchanged counts against a baseline."""
+    baseline_fp = {row["fingerprint"] for row in baseline}
+    current_fp = {f.fingerprint for f in findings}
+    new = [f for f in findings if f.fingerprint not in baseline_fp]
+    removed = [row for row in baseline if row["fingerprint"] not in current_fp]
+    unchanged = [row for row in baseline if row["fingerprint"] in current_fp]
+    info = {
+        "path": path,
+        "baseline_findings": len(baseline),
+        "added": len(new),
+        "removed": len(removed),
+        # Counted over baseline rows so `unchanged + removed == baseline_findings`.
+        "unchanged": len(unchanged),
+        "removed_findings": removed[:200],
+    }
+    return info, new
+
+
+def _apply_baseline(findings: list[Finding], path_arg: str) -> tuple[dict, list[Finding]]:
+    path = Path(path_arg)
+    return baseline_diff(findings, load_baseline(path), str(path.resolve()))
+
+
 # --------------------------------------------------------------------------
 # Report writers: terminal, Markdown, JSON, SARIF 2.1.0
 # --------------------------------------------------------------------------
 def render_terminal(findings: list[Finding], online_table: list[dict],
-                    evidence: list[EvidenceRun], limit: int = 25) -> str:
+                    evidence: list[EvidenceRun], limit: int = 25, *,
+                    config: dict | None = None,
+                    baseline: dict | None = None) -> str:
     lines: list[str] = []
     summary = summarize(findings)
     lines.append(f"{TOOL_NAME} v{VERSION} (sha256 {engine_identity()['sha256'][:12]}…)"
                  f" — summary: {summary['total']} finding(s)")
+    if config:
+        where = config.get("path") or "no rust-audit.toml found"
+        disabled = config.get("disabled_rules") or []
+        extra = f" — disabled: {', '.join(disabled)}" if disabled else ""
+        lines.append(f"config: {where} ({config.get('origin', 'defaults')}){extra}")
     for sev in SEVERITY_ORDER:
         if summary["by_severity"].get(sev):
             lines.append(f"  {sev.upper():8s} {summary['by_severity'][sev]}")
+    if baseline:
+        lines.append(f"baseline: {baseline['path']} ({baseline['baseline_findings']} finding(s))"
+                     f" — {baseline['added']} new, {baseline['removed']} fixed/gone, "
+                     f"{baseline['unchanged']} unchanged; reporting the new ones only")
     lines.append("")
     for f in findings[:limit]:
         fn = f" ({f.function})" if f.function else ""
@@ -1871,13 +2088,22 @@ def render_terminal(findings: list[Finding], online_table: list[dict],
 
 
 def render_markdown(findings: list[Finding], online_table: list[dict],
-                    evidence: list[EvidenceRun], target: str) -> str:
+                    evidence: list[EvidenceRun], target: str, *,
+                    config: dict | None = None,
+                    baseline: dict | None = None) -> str:
     summary = summarize(findings)
     lines = [
         f"# {TOOL_NAME} report — `{target}`",
         "",
         f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')} — tool version {VERSION}",
         f"Engine: `{engine_identity()['path']}` — sha256 `{engine_identity()['sha256']}`",
+    ]
+    if config:
+        where = config.get("path") or "no rust-audit.toml found"
+        disabled = config.get("disabled_rules") or []
+        extra = f" — disabled rules: {', '.join(disabled)}" if disabled else ""
+        lines.append(f"Config: `{where}` ({config.get('origin', 'defaults')}){extra}")
+    lines += [
         "",
         "## Summary",
         "",
@@ -1889,6 +2115,20 @@ def render_markdown(findings: list[Finding], online_table: list[dict],
     lines += ["", "| Tier | Count |", "|---|---|"]
     for tier in (1, 2, 3, 4):
         lines.append(f"| Tier {tier} | {summary['by_tier'].get(tier, 0)} |")
+
+    if baseline:
+        lines += [
+            "", "## Baseline", "",
+            f"Compared with `{baseline['path']}` ({baseline['baseline_findings']} "
+            f"finding(s)): **{baseline['added']} new**, {baseline['removed']} "
+            f"fixed/gone, {baseline['unchanged']} unchanged. Only findings absent "
+            "from the baseline are listed.",
+        ]
+        if baseline.get("removed_findings"):
+            lines += ["", "Present in the baseline but not in this run:", ""]
+            for row in baseline["removed_findings"][:50]:
+                lines.append(f"- [{row['rule_id']}] `{row['file']}:{row['line']}` — "
+                             f"{row['message']}")
 
     for tier, title in [(1, "Stubs, fakes, demo code and fake tests"),
                         (2, "Panics, unsafe, swallowed errors, security"),
@@ -1940,18 +2180,23 @@ def render_markdown(findings: list[Finding], online_table: list[dict],
 
 
 def render_json(findings: list[Finding], online_table: list[dict],
-                evidence: list[EvidenceRun], target: str) -> str:
+                evidence: list[EvidenceRun], target: str, *,
+                config: dict | None = None,
+                baseline: dict | None = None) -> str:
     payload = {
         "tool": TOOL_NAME,
         "version": VERSION,
         "engine": engine_identity(),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "target": target,
+        "config": config if config is not None else config_summary(None),
         "summary": summarize(findings),
         "findings": [f.to_dict() for f in findings],
         "online": online_table,
         "evidence_runs": [e.to_dict() for e in evidence],
     }
+    if baseline:
+        payload["baseline"] = baseline
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -1969,8 +2214,9 @@ def render_sarif(findings: list[Finding]) -> str:
         })
     results = []
     for f in findings:
-        fp = hashlib.sha1(
-            f"{f.rule_id}|{f.file}|{f.line}|{f.evidence}".encode("utf-8")).hexdigest()[:16]
+        # Same identity as the JSON `fingerprint`: a line move must not create
+        # a new code-scanning alert.
+        fp = f.fingerprint
         results.append({
             "ruleId": f.rule_id,
             "level": level_map.get(f.severity, "warning"),
@@ -2824,22 +3070,26 @@ def _filter_rules(findings: list[Finding], rules_arg: str | None) -> list[Findin
     return [f for f in findings if f.rule_id in wanted or any(f.rule_id.startswith(w) for w in wanted)]
 
 
-def _emit_reports(findings, online_table, evidence, args) -> None:
+def _emit_reports(findings, online_table, evidence, args, *, config=None,
+                  baseline=None) -> None:
     formats = [f.strip() for f in (args.format or "terminal").split(",") if f.strip()]
     out_dir = Path(args.out or "report")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target = str(args.root)
     if "terminal" in formats:
-        print(render_terminal(findings, online_table, evidence))
+        print(render_terminal(findings, online_table, evidence,
+                              config=config, baseline=baseline))
     if "md" in formats or "markdown" in formats:
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"rust-audit-{stamp}.md"
-        path.write_text(render_markdown(findings, online_table, evidence, target), encoding="utf-8")
+        path.write_text(render_markdown(findings, online_table, evidence, target,
+                                        config=config, baseline=baseline), encoding="utf-8")
         print(f"wrote {path}")
     if "json" in formats:
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"rust-audit-{stamp}.json"
-        path.write_text(render_json(findings, online_table, evidence, target), encoding="utf-8")
+        path.write_text(render_json(findings, online_table, evidence, target,
+                                    config=config, baseline=baseline), encoding="utf-8")
         print(f"wrote {path}")
     if "sarif" in formats:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -2865,12 +3115,24 @@ def cmd_scan(args) -> int:
     bad = _require_root(root, need_sources=True)
     if bad is not None:
         return bad
-    cfg = load_config(root, args.config)
+    try:
+        cfg = load_config(root, args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if args.exclude:
         cfg["exclude"] = list(cfg.get("exclude") or []) + [g.strip() for g in args.exclude.split(",")]
     findings, units, _, online_table = run_scan(root, cfg, online=args.online)
     findings = _filter_rules(findings, args.rules)
-    _emit_reports(findings, online_table, [], args)
+    baseline_info = None
+    if args.baseline:
+        try:
+            baseline_info, findings = _apply_baseline(findings, args.baseline)
+        except BaselineError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+    _emit_reports(findings, online_table, [], args,
+                  config=config_summary(cfg), baseline=baseline_info)
     if not args.no_gap_report:
         gap = write_gap_report(Path(args.out or "report"), "scan", str(root), [],
                                {"online": args.online, "deep": False, "miri": False,
@@ -2887,7 +3149,11 @@ def cmd_fix(args) -> int:
     bad = _require_root(root, need_sources=True)
     if bad is not None:
         return bad
-    cfg = load_config(root, args.config)
+    try:
+        cfg = load_config(root, args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     findings, units, _, _ = run_scan(root, cfg, online=False)
     findings = _filter_rules(findings, args.rules)
     rc = 0
@@ -2960,14 +3226,26 @@ def cmd_full(args) -> int:
     bad = _require_root(root, need_sources=True)
     if bad is not None:
         return bad
-    cfg = load_config(root, args.config)
+    try:
+        cfg = load_config(root, args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     findings, units, _, online_table = run_scan(root, cfg, online=args.online)
     runs = collect_evidence(root, deep=args.deep, supply_chain=True,
                             release=args.release, miri=args.miri, budget=args.budget,
                             findings=findings)
     findings = _filter_rules(findings, args.rules)
+    baseline_info = None
+    if args.baseline:
+        try:
+            baseline_info, findings = _apply_baseline(findings, args.baseline)
+        except BaselineError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     findings.sort(key=lambda f: (-SEVERITY_RANK.get(f.severity, 0), f.file, f.line, f.rule_id))
-    _emit_reports(findings, online_table, runs, args)
+    _emit_reports(findings, online_table, runs, args,
+                  config=config_summary(cfg), baseline=baseline_info)
     if not args.no_gap_report:
         gap = write_gap_report(Path(args.out or "report"), "full", str(root), runs,
                                {"online": args.online, "deep": args.deep, "miri": args.miri,
@@ -3004,6 +3282,8 @@ def main(argv: list[str] | None = None) -> int:
     _add_common(p_scan)
     p_scan.add_argument("--online", action="store_true",
                         help="verify crates against crates.io/docs.rs/OSV (network)")
+    p_scan.add_argument("--baseline",
+                        help="earlier JSON report: report only findings not in it")
     p_scan.set_defaults(func=cmd_scan)
 
     p_fix = sub.add_parser("fix", help="apply safe fixes or propose assisted patches")
@@ -3035,6 +3315,8 @@ def main(argv: list[str] | None = None) -> int:
     p_full.add_argument("--miri", action="store_true")
     p_full.add_argument("--deep", action="store_true")
     p_full.add_argument("--budget", type=int, default=600)
+    p_full.add_argument("--baseline",
+                        help="earlier JSON report: report only findings not in it")
     p_full.set_defaults(func=cmd_full)
 
     p_setup = sub.add_parser(

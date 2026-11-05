@@ -1,10 +1,20 @@
 # Rust Audit configuration.
-# Copy to the root of the audited project as `rust-audit.toml`.
+# Copy to the root of the audited project as `rust-audit.toml`. It is found
+# automatically when you scan this directory or any directory below it (the
+# report names the file it used). An explicit --config that does not exist is
+# an execution error, never a silent fallback to defaults.
 
 [rules]
 # Disable rules by id (prefixes work: "R18" disables all dependency rules).
 disabled = []
 # Example: disabled = ["R14", "R15"]
+
+# Prefer a narrow suppression over disabling a whole rule. R16 only treats
+# lock()/read()/write() as guards when the file has Mutex/RwLock evidence, so
+# `db.read()` on a pool is not reported; a remaining shape can be named here
+# ("db.read" matches `self.db.read()`).
+# [rules.R16]
+# ignore_methods = ["db.read", "db.write"]
 
 [thresholds]
 clones_per_fn = 3          # R14
@@ -18,3 +28,8 @@ exclude = ["target/*", "*/target/*", ".git/*", "report/*", "*/node_modules/*"]
 # Path to an organization-private list of known hallucinated / banned crate
 # names (one per line). Merged with resources/suspicious_names.txt.
 corpus = ""
+
+# Baselines are a CLI concern, not a config key:
+#   rust-audit scan crates --format json --baseline report/rust-audit-old.json
+# reports only findings whose line-independent fingerprint is absent from the
+# baseline, with added/removed/unchanged counts in the JSON `baseline` block.

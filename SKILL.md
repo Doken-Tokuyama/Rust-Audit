@@ -28,7 +28,7 @@ and proceed only on `VERIFIED` (exit `0`) — key pin → SSH signature →
 checksum → tag identity, plus your local copy against the signed manifest:
 
 ```bash
-scripts/verify_release.sh v0.2.7 ./rust_audit.py
+scripts/verify_release.sh v0.2.8 ./rust_audit.py
 ```
 
 The chain and the pinned signing key live in
@@ -115,7 +115,7 @@ disk full? concurrency? 8. prove stubs/fakes exist only in tests.
 
 | ID | Detects | Severity | Fix |
 |---|---|---|---|
-| R09 | `.unwrap()`/`.expect()`/`panic!` in production code | high | assisted (→`?`) |
+| R09 | `.unwrap()`/`.expect()`/`panic!` in production code (`unwrap`/`panic!` high; `expect` medium — it names the invariant it relies on) | high/medium | assisted (→`?`) |
 | R10 | swallowed errors (`let _ =`, `if let Ok(_)`, `.ok();`, `unwrap_or_default()`) | medium | assisted |
 | R11 | `unsafe`/`transmute`/raw pointers/`extern "C"` without `// SAFETY:` comment | high | none |
 | R12 | hardcoded secrets (AWS/GitHub/Slack keys, private keys, high-entropy literals) | critical | **safe** (→ env var + `.env.example`) |
@@ -127,7 +127,7 @@ disk full? concurrency? 8. prove stubs/fakes exist only in tests.
 |---|---|---|---|
 | R14 | `.clone()` abuse (>3 per fn, configurable) | medium | none |
 | R15 | invented lifetimes (≥3 per signature, configurable) | low | none |
-| R16 | async misuse: blocking sleep/fs in async, `std::sync::Mutex` held across `.await`, `block_on` in async, unbounded `tokio::spawn` in loops, undeclared tokio features | high/medium | assisted (sleep) |
+| R16 | async misuse: blocking sleep/fs in async, `std::sync::Mutex`/`RwLock` guard held across `.await` (needs `Mutex`/`RwLock` evidence — a pool's `db.read()` is not a guard), `block_on` in async, unbounded `tokio::spawn` in loops, undeclared tokio features | high/medium | assisted (sleep) |
 | R17 | `Arc<Mutex<..>>` wrapping everything | low | none |
 
 ### Tier 4 — fake/hallucinated dependencies and supply chain
@@ -147,6 +147,34 @@ used as crates** and **86% of the rest are near-miss names** (omitted hyphens).
 | R19 | slopsquatting window: first publish <90 days + low downloads + generic name; OSV advisories | high | none |
 | R20 | potential typosquat of a popular crate (edit distance ≤2 vs bundled corpus) | high | none |
 | R21 | risky `build.rs`/proc-macro: `Command::new`, network, file writes at compile time | high | none |
+
+## Configuration and baselines
+
+`rust-audit.toml` is discovered at the scanned path or any parent up to the
+repository root (scanning `crates/` honours the config at the repo root), and
+the effective config is named in the terminal header, the Markdown and the JSON
+(`config.path`, `config.origin`, `config.disabled_rules`). An explicit
+`--config` path that does not exist is an execution error (exit 2) instead of
+a silent fallback to defaults. Rules can be suppressed narrowly, without
+disabling them for the whole project:
+
+```toml
+[rules.R16]
+ignore_methods = ["db.read", "db.write"]   # e.g. a pool, not a lock
+```
+
+Every finding carries a line-independent `fingerprint` (rule + file + function
++ normalized evidence) in the JSON and the SARIF `partialFingerprints`. Compare
+runs with `--baseline`:
+
+```bash
+rust-audit scan crates --format json --baseline report/rust-audit-baseline.json
+```
+
+The report then lists only findings absent from the baseline, with
+`baseline.added/removed/unchanged` counts, and the exit code covers the new
+findings only. Identical calls in one function share one identity, so a
+repeated smell is counted once per function.
 
 ## Auto-fix policy
 
@@ -185,7 +213,7 @@ tells them apart, so quote it when comparing two reports.
 `templates/` contains: `github-workflow.yml` (scan + SARIF upload +
 `cargo test --locked` + audit/deny/vet + zizmor self-check + Scorecard +
 artifact attestations), `deny.toml` (only crates.io, deny yanked/banned), 
-`rust-audit.toml` (thresholds, disabled rules, corpus), `dependabot.yml`,
+`rust-audit.toml` (thresholds, disabled rules, per-rule options, corpus), `dependabot.yml`,
 `pre-commit-config.yaml`, `ast-grep/` (structural rewrite rules for the optional
 ast-grep backend). Pin third-party Actions to full commit SHAs before enabling.
 

@@ -35,7 +35,7 @@ gh attestation verify rust_audit-*-py3-none-any.whl -R Doken-Tokuyama/Rust-Audit
 # 0) verify before use — check the exact audited bytes before executing them
 #    (key pin -> SSH signature -> checksum -> tag identity) and proceed only
 #    on VERIFIED (exit 0); see SECURITY.md for the pinned key and the chain
-scripts/verify_release.sh v0.2.7 ./rust_audit.py
+scripts/verify_release.sh v0.2.8 ./rust_audit.py
 
 python3 scripts/rust_audit.py selftest
 python3 scripts/rust_audit.py scan  <rust-project> --format terminal,md,json,sarif --fail-on high
@@ -44,6 +44,15 @@ python3 scripts/rust_audit.py cargo <rust-project> --deep --supply-chain
 ```
 
 Exit codes: `0` clean · `1` findings at/above `--fail-on` · `2` execution error.
+Every finding carries a line-independent `fingerprint` (rule + file + function
++ normalized evidence) in the JSON and the SARIF `partialFingerprints`, and
+`scan --baseline <earlier-report.json>` reports only findings absent from that
+report with `added/removed/unchanged` counts — a CI gate on "what did this
+change introduce?" instead of "what does the file contain today?".
+`rust-audit.toml` is discovered at the scanned path or any parent up to the
+repository root, and the effective config is named in the terminal header and
+the JSON `config` block; a `--config` path that does not exist exits `2`
+rather than silently auditing with defaults.
 Every run writes a **not-executed report** (`report/not-executed-<date>.md`)
 listing the checks that could not run and how to enable them — read it before
 calling an audit complete.

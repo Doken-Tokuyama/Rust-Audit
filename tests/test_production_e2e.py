@@ -77,6 +77,16 @@ TOOL = ROOT / "scripts" / "rust_audit.py"
 #     hallucinated name nor slopsquatting bait; a typo in Cargo.toml stays
 #     R20's job. thiserror's published major is 2.
 #   - R20: h2, http, h3 and md-5 are well-known protocol crates.
+# Fifth deliberate update (2026-11-05, feedback from a Windows workspace):
+#   - R09 reports `.expect("...")` at medium while a bare `.unwrap()`/`panic!`
+#     stays high: an expect names the invariant it relies on, so it is a
+#     reviewable medium rather than the same claim as an undocumented unwrap.
+#     Totals and by_rule are unchanged; only severity moves:
+#     ripgrep high 150 -> 139 / medium 19 -> 30; tokio high 1178 -> 1086 /
+#     medium 258 -> 350.
+#   - R16's lock detector now needs Mutex/RwLock evidence, so a pool accessor
+#     like `db.read()` is not a guard. Neither pinned workspace has that shape
+#     (counts unchanged); tests/test_feedback_regressions.py pins the case.
 # Deltas: ripgrep 321 -> 309 (R04 -5, R09 -3, R12 -1, R18c -2, R18d -1);
 # tokio 2436 -> 2366 (R04 -4, R09 -41, R10 -1, R16 -11, R18c -2, R18d -2,
 # R20 -1). Every removed finding was re-read in the pinned source.
@@ -86,7 +96,7 @@ PROJECTS = {
         "sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
         "clean_rule": "R01",  # absent here: `scan --rules R01` must exit 0
         "total": 309,
-        "by_severity": {"critical": 0, "high": 150, "medium": 19,
+        "by_severity": {"critical": 0, "high": 139, "medium": 30,
                         "low": 124, "info": 16},
         "by_rule": {
             "R02": 124, "R09": 137, "R04": 17, "R14": 12, "R10": 6,
@@ -99,7 +109,7 @@ PROJECTS = {
         "sha": "cdd9dae3aa5056e23dc4d5bc4f852ab8fbf27aff",
         "clean_rule": "R13",  # absent here: `scan --rules R13` must exit 0
         "total": 2366,
-        "by_severity": {"critical": 8, "high": 1178, "medium": 258,
+        "by_severity": {"critical": 8, "high": 1086, "medium": 350,
                         "low": 739, "info": 183},
         "by_rule": {
             "R02": 728, "R09": 500, "R11": 788, "R08": 160, "R10": 75,
